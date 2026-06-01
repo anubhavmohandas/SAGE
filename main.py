@@ -26,6 +26,7 @@ from sage.synapse.parser import parse_repo
 from sage.synapse.mapper import attach_cves, get_blast_radius
 from sage.synapse.export import export_graph
 from sage.scanner.semgrep import scan_blast_radius, save_findings, print_findings_summary
+from sage.analyzer.llm import analyze_findings, save_confirmed, print_analysis_summary
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -144,6 +145,15 @@ def run_synapse(repo_path: str):
     findings = scan_blast_radius(G, repo_path)
     save_findings(findings)
     print_findings_summary(findings)
+
+    # Step 5 — LLM Analyzer
+    print(f"\n{'='*60}")
+    print(f"  ANALYZER — LLM Vulnerability Confirmation")
+    print(f"{'='*60}\n")
+    print("[SAGE] Analyzer Step 1/1 — Confirming with Claude...")
+    confirmed = analyze_findings(findings, G, repo_path)
+    save_confirmed(confirmed)
+    print_analysis_summary(confirmed)
 
 
 def run_single_cve(cve_id: str):
