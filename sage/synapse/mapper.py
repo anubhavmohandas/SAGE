@@ -4,10 +4,10 @@ synapse/mapper.py — CVE node mapper
 Takes the code graph from parser.py and attaches CVE nodes to it.
 
 Before mapping:
-    file:cybertrace/dns.py → lib:dnspython
+    file:your_repo/dns.py → lib:dnspython
 
 After mapping:
-    file:cybertrace/dns.py → lib:dnspython → cve:CVE-2025-13836
+    file:your_repo/dns.py → lib:dnspython → cve:CVE-XXXX-XXXXX
 
 Teaching note — why this is the key step:
     This is what makes SAGE different from a simple CVE scanner.

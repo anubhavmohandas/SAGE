@@ -94,7 +94,7 @@ def scan_blast_radius(G, repo_path: str) -> list[dict]:
         [
           {
             "cve_id":       "CVE-2025-69223",
-            "file":         "cybertrace/network.py",
+            "file":         "your_repo/network.py",
             "function":     "fetch_data()",
             "line":         42,
             "rule_id":      "python.aiohttp.security...",
