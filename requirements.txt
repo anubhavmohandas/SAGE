@@ -1,0 +1,29 @@
+# SAGE — Python dependencies
+# All versions pinned. Verify latest on PyPI before updating.
+
+# Environment
+python-dotenv==1.0.1
+
+# HTTP client — NVD API calls
+requests==2.32.3
+
+# Version matching — PEP 440 compliant (never manual string comparison)
+packaging==24.1
+
+# LLM — analyzer + patch generator
+anthropic==0.40.0
+
+# GitHub PR automation
+PyGithub==2.5.0
+
+# Static analysis
+semgrep==1.90.0
+
+# Knowledge graph
+networkx==3.4.2
+
+# JSON schema validation — defend against malformed CVE data
+jsonschema==4.23.0
+
+# Database
+# sqlite3 is built into Python stdlib — no install needed

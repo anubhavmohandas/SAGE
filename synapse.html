@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SYNAPSE — Knowledge Graph</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; font-family: 'SF Mono', 'Fira Code', monospace; transition: background 0.3s; }
+  body.dark  { background: #0a0d14; }
+  body.light { background: #eef2f8; }
+  canvas { display: block; }
+
+  #tooltip {
+    position: absolute;
+    border-radius: 7px;
+    font-size: 11px;
+    padding: 9px 14px;
+    pointer-events: none;
+    display: none;
+    max-width: 220px;
+    line-height: 1.75;
+    z-index: 10;
+  }
+  body.dark  #tooltip { background: rgba(8,12,22,0.95); border: 1px solid rgba(100,200,255,0.25); color: #a0d4ff; }
+  body.light #tooltip { background: rgba(255,255,255,0.98); border: 1px solid rgba(60,120,200,0.25); color: #1a4070; box-shadow: 0 4px 16px rgba(0,0,80,0.1); }
+
+  #breadcrumb {
+    position: absolute;
+    top: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; letter-spacing: 1.4px;
+    white-space: nowrap; pointer-events: none;
+    transition: color 0.3s;
+  }
+  body.dark  #breadcrumb { color: rgba(100,180,255,0.45); }
+  body.light #breadcrumb { color: rgba(40,90,170,0.55); }
+
+  /* attack path banner */
+  #path-banner {
+    position: absolute;
+    top: 40px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; letter-spacing: 1px;
+    padding: 4px 14px; border-radius: 20px;
+    display: none; white-space: nowrap; pointer-events: none;
+    background: rgba(255,40,40,0.15); border: 1px solid rgba(255,80,80,0.4);
+    color: #ff7070;
+  }
+
+  /* keyboard hints */
+  #hints {
+    position: absolute;
+    top: 14px; left: 14px;
+    font-size: 9px; letter-spacing: 0.5px; line-height: 1.9;
+    transition: color 0.3s;
+  }
+  body.dark  #hints { color: rgba(255,255,255,0.2); }
+  body.light #hints { color: rgba(0,0,60,0.3); }
+
+  #controls {
+    position: absolute;
+    bottom: 14px; right: 14px;
+    display: flex; gap: 8px; align-items: center;
+  }
+  #controls button {
+    border-radius: 5px; font-size: 10px;
+    padding: 5px 13px; cursor: pointer;
+    letter-spacing: 0.5px; transition: all 0.2s;
+    font-family: 'SF Mono', monospace;
+  }
+  body.dark  #controls button { background: rgba(100,180,255,0.08); border: 1px solid rgba(100,180,255,0.22); color: rgba(120,190,255,0.75); }
+  body.light #controls button { background: rgba(40,100,200,0.07); border: 1px solid rgba(40,100,200,0.22); color: rgba(30,80,160,0.8); }
+  body.dark  #controls button:hover:not(:disabled) { background: rgba(100,180,255,0.18); }
+  body.light #controls button:hover:not(:disabled) { background: rgba(40,100,200,0.15); }
+  #controls button:disabled { opacity: 0.22; cursor: default; }
+  #theme-toggle { width:32px; height:32px; border-radius:50%!important; padding:0!important; font-size:15px!important; display:flex; align-items:center; justify-content:center; }
+
+  #legend {
+    position: absolute; bottom: 14px; left: 14px;
+    font-size: 9px; line-height: 2; letter-spacing: 0.5px; transition: color 0.3s;
+  }
+  body.dark  #legend { color: rgba(255,255,255,0.3); }
+  body.light #legend { color: rgba(0,0,60,0.4); }
+  .leg { display:flex; align-items:center; gap:7px; }
+  .dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+
+  /* zoom indicator */
+  #zoom-label {
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 9px; letter-spacing: 1px; opacity: 0;
+    transition: opacity 0.4s;
+  }
+  body.dark  #zoom-label { color: rgba(100,180,255,0.5); }
+  body.light #zoom-label { color: rgba(40,100,200,0.5); }
+</style>
+</head>
+<body class="dark">
+<canvas id="c"></canvas>
+<div id="tooltip"></div>
+<div id="breadcrumb">SYNAPSE · KNOWLEDGE GRAPH</div>
+<div id="path-banner"></div>
+
+<div id="hints">
+  ESC / ← &nbsp;Back<br>
+  R &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Reset<br>
+  S &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Save PNG<br>
+  scroll &nbsp;Zoom
+</div>
+
+<div id="controls">
+  <button id="back" disabled>← BACK</button>
+  <button id="reset">RESET</button>
+  <button id="export">SAVE PNG</button>
+  <button id="theme-toggle" title="Toggle theme">☀️</button>
+</div>
+
+<div id="legend">
+  <div class="leg"><div class="dot" style="background:#5bc8ff"></div> FILE</div>
+  <div class="leg"><div class="dot" style="background:#4db87a"></div> FUNCTION</div>
+  <div class="leg"><div class="dot" style="background:#e8960a"></div> LIBRARY</div>
+  <div class="leg"><div class="dot" style="background:#ff4444"></div> CVE</div>
+</div>
+<div id="zoom-label">100%</div>
+
+<script>
+// ─── THEME ───────────────────────────────────────────────────────────────────
+let isDark = true;
+const themeBtn = document.getElementById('theme-toggle');
+themeBtn.addEventListener('click', () => {
+  isDark = !isDark;
+  document.body.className = isDark ? 'dark' : 'light';
+  themeBtn.textContent = isDark ? '☀️' : '🌙';
+});
+
+// ─── CANVAS + CONTEXT ────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const tooltip    = document.getElementById('tooltip');
+const pathBanner = document.getElementById('path-banner');
+const zoomLabel  = document.getElementById('zoom-label');
+
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+resize();
+window.addEventListener('resize', () => { resize(); layout(); });
+
+// ─── DATA ────────────────────────────────────────────────────────────────────
+const GRAPH = {
+  nodes: {
+    root:           { id:'root',           label:'auth.py',          type:'file',     color:'#5bc8ff', glowD:'rgba(91,200,255,0.5)',  glowL:'rgba(30,120,220,0.28)',  info:'Entry: auth module',                        children:['login_user','validate_token','db','requests'] },
+    login_user:     { id:'login_user',     label:'login_user()',      type:'function', color:'#4db87a', glowD:'rgba(77,184,122,0.45)', glowL:'rgba(30,140,80,0.28)',   info:'Handles user login flow',                   children:['requests','sql_query'] },
+    validate_token: { id:'validate_token', label:'validate_token()',  type:'function', color:'#4db87a', glowD:'rgba(77,184,122,0.45)', glowL:'rgba(30,140,80,0.28)',   info:'JWT validation logic',                      children:['jwt_lib'] },
+    db:             { id:'db',             label:'db.py',             type:'file',     color:'#5bc8ff', glowD:'rgba(91,200,255,0.5)',  glowL:'rgba(30,120,220,0.28)',  info:'Database connector',                        children:['sql_query'] },
+    requests:       { id:'requests',       label:'requests',          type:'library',  color:'#e8960a', glowD:'rgba(232,150,10,0.45)', glowL:'rgba(180,100,0,0.28)',   info:'v2.28.0 — HTTP client',                    children:['urllib3','certifi'] },
+    sql_query:      { id:'sql_query',      label:'sql_query()',       type:'function', color:'#4db87a', glowD:'rgba(77,184,122,0.45)', glowL:'rgba(30,140,80,0.28)',   info:'Raw SQL execution — risky',                 children:['cve_sqli'] },
+    jwt_lib:        { id:'jwt_lib',        label:'PyJWT',             type:'library',  color:'#e8960a', glowD:'rgba(232,150,10,0.45)', glowL:'rgba(180,100,0,0.28)',   info:'v2.4.0 — JWT library',                     children:[] },
+    urllib3:        { id:'urllib3',        label:'urllib3',           type:'library',  color:'#e8960a', glowD:'rgba(232,150,10,0.45)', glowL:'rgba(180,100,0,0.28)',   info:'v1.26.5 — HTTP core',                      children:['cve_urllib3'] },
+    certifi:        { id:'certifi',        label:'certifi',           type:'library',  color:'#e8960a', glowD:'rgba(232,150,10,0.45)', glowL:'rgba(180,100,0,0.28)',   info:'CA bundle — no CVE',                       children:[] },
+    cve_sqli:       { id:'cve_sqli',       label:'CVE-2023-1671',     type:'cve',      color:'#ff4444', glowD:'rgba(255,68,68,0.6)',   glowL:'rgba(200,0,0,0.3)',      info:'SQL Injection\nSeverity: CRITICAL\nCWE-89', children:[] },
+    cve_urllib3:    { id:'cve_urllib3',    label:'CVE-2021-33503',    type:'cve',      color:'#ff4444', glowD:'rgba(255,68,68,0.6)',   glowL:'rgba(200,0,0,0.3)',      info:'ReDoS via urllib3\nSeverity: HIGH\nCWE-400', children:[] },
+  },
+  edges: [
+    ['root','login_user',     'CALLS'],
+    ['root','validate_token', 'CALLS'],
+    ['root','db',             'IMPORTS'],
+    ['root','requests',       'IMPORTS'],
+    ['login_user','requests', 'USES'],
+    ['login_user','sql_query','CALLS'],
+    ['validate_token','jwt_lib','USES'],
+    ['db','sql_query',        'CALLS'],
+    ['requests','urllib3',    'DEPENDS_ON'],
+    ['requests','certifi',    'DEPENDS_ON'],
+    ['sql_query','cve_sqli',  'AFFECTS'],
+    ['urllib3','cve_urllib3', 'AFFECTS'],
+  ]
+};
+
+// Build adjacency for path tracing
+const adjReverse = {}; // child → [parents]
+Object.keys(GRAPH.nodes).forEach(id => adjReverse[id] = []);
+GRAPH.edges.forEach(([a, b]) => adjReverse[b].push(a));
+
+// Precompute connection counts
+const connCount = {};
+Object.keys(GRAPH.nodes).forEach(id => connCount[id] = 0);
+GRAPH.edges.forEach(([a,b]) => { connCount[a]++; connCount[b]++; });
+
+function nodeRadius(id) {
+  return 20 + Math.min(connCount[id] * 3, 14);
+}
+
+const TYPE_ICON = { file:'{ }', function:'()', library:'⬡', cve:'⚠' };
+
+// ─── ATTACK PATH TRACING ─────────────────────────────────────────────────────
+// BFS from a CVE back to root — returns Set of node IDs and edge pairs on the path
+function traceAttackPath(cveId) {
+  const visited = new Set();
+  const pathEdges = new Set();
+  const queue = [cveId];
+  const parent = { [cveId]: null };
+
+  while (queue.length) {
+    const cur = queue.shift();
+    if (visited.has(cur)) continue;
+    visited.add(cur);
+    adjReverse[cur].forEach(p => {
+      if (!visited.has(p)) {
+        parent[p] = cur;
+        pathEdges.add(`${p}→${cur}`);
+        queue.push(p);
+      }
+    });
+  }
+  return { pathNodes: visited, pathEdges };
+}
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let centerNodeId = 'root';
+let history      = [];
+let positions    = {};
+let pulses       = [];
+let hoveredNode  = null;
+let attackPath   = null; // { pathNodes, pathEdges } or null
+let hoveredEdge  = null; // { a, b, label, mx, my }
+
+// zoom/pan
+let zoom = 1, panX = 0, panY = 0;
+let zoomTimeout;
+
+// tween
+let tween = null; // { from:{}, to:{}, t, duration }
+
+function getConnectedIds(nodeId) {
+  const ids = new Set([nodeId]);
+  GRAPH.edges.forEach(([a,b]) => {
+    if (a===nodeId) ids.add(b);
+    if (b===nodeId) ids.add(a);
+  });
+  return [...ids];
+}
+
+// ─── LAYOUT ──────────────────────────────────────────────────────────────────
+function layout(animate = false) {
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H/2;
+  const visibleIds  = getConnectedIds(centerNodeId);
+  const neighbours  = visibleIds.filter(id => id !== centerNodeId);
+  const n = neighbours.length;
+  const R = Math.min(W, H) * 0.32;
+
+  const newPositions = {};
+  newPositions[centerNodeId] = { x: cx, y: cy };
+  neighbours.forEach((id, i) => {
+    const angle = (i/n)*Math.PI*2 - Math.PI/2;
+    newPositions[id] = { x: cx + Math.cos(angle)*R, y: cy + Math.sin(angle)*R };
+  });
+
+  if (animate && Object.keys(positions).length) {
+    // Build tween from current → new
+    const from = {}, to = {};
+    Object.keys(newPositions).forEach(id => {
+      from[id] = positions[id] ? { ...positions[id] } : { x: cx, y: cy };
+      to[id]   = newPositions[id];
+    });
+    // ← KEY FIX: immediately drop ghost nodes from positions
+    // Only keep ids that belong to the new view; old ids are gone.
+    positions = { ...from };
+    tween = { from, to, t: 0, duration: 420 };
+  } else {
+    positions = newPositions;
+    tween = null;
+  }
+
+  pulses = [];
+  GRAPH.edges.forEach(([a,b]) => {
+    const pa = newPositions[a], pb = newPositions[b];
+    if (pa && pb) pulses.push({ a, b, t: Math.random(), speed: 0.004 + Math.random()*0.003 });
+  });
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function easeInOut(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+function lerp(a, b, t) { return a + (b-a)*t; }
+
+function bezierCP(pa, pb) {
+  const mx=(pa.x+pb.x)/2, my=(pa.y+pb.y)/2;
+  const dx=pb.x-pa.x, dy=pb.y-pa.y;
+  const len=Math.sqrt(dx*dx+dy*dy)||1, bend=len*0.10;
+  return { x: mx-(dy/len)*bend, y: my+(dx/len)*bend };
+}
+
+function bezierPoint(pa, cp, pb, t) {
+  return {
+    x: (1-t)*(1-t)*pa.x + 2*(1-t)*t*cp.x + t*t*pb.x,
+    y: (1-t)*(1-t)*pa.y + 2*(1-t)*t*cp.y + t*t*pb.y,
+  };
+}
+
+function worldToScreen(x, y) {
+  return { x: x*zoom + panX, y: y*zoom + panY };
+}
+
+function screenToWorld(sx, sy) {
+  return { x: (sx - panX)/zoom, y: (sy - panY)/zoom };
+}
+
+// ─── DRAW ─────────────────────────────────────────────────────────────────────
+function drawGrid() {
+  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.028)' : 'rgba(0,0,100,0.045)';
+  ctx.lineWidth = 0.5;
+  const step = 44 * zoom;
+  const offX = panX % step, offY = panY % step;
+  for (let x=offX; x<canvas.width;  x+=step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+  for (let y=offY; y<canvas.height; y+=step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y);  ctx.stroke(); }
+}
+
+function drawEdge(a, b, edgeLabel) {
+  const rawA = positions[a], rawB = positions[b];
+  if (!rawA||!rawB) return;
+
+  const pa = worldToScreen(rawA.x, rawA.y);
+  const pb = worldToScreen(rawB.x, rawB.y);
+  const cp = bezierCP(pa, pb);
+
+  const edgeKey = `${a}→${b}`;
+  const onPath  = attackPath && attackPath.pathEdges.has(edgeKey);
+  const isHE    = hoveredEdge && hoveredEdge.a===a && hoveredEdge.b===b;
+
+  let strokeColor, lw;
+  if (onPath) {
+    strokeColor = `rgba(255,80,80,${isDark?'0.75':'0.65'})`;
+    lw = 2.5;
+  } else if (isHE) {
+    strokeColor = isDark ? 'rgba(140,200,255,0.6)' : 'rgba(40,100,200,0.55)';
+    lw = 2;
+  } else {
+    strokeColor = isDark ? 'rgba(100,160,220,0.2)' : 'rgba(40,100,200,0.15)';
+    lw = 1.5;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(pa.x, pa.y);
+  ctx.quadraticCurveTo(cp.x, cp.y, pb.x, pb.y);
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = lw;
+  ctx.stroke();
+
+  // Arrow
+  const angle = Math.atan2(pb.y - cp.y, pb.x - cp.x);
+  const r = nodeRadius(b)*zoom;
+  const ax = pb.x - Math.cos(angle)*r, ay = pb.y - Math.sin(angle)*r;
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(ax-Math.cos(angle-0.38)*9, ay-Math.sin(angle-0.38)*9);
+  ctx.lineTo(ax-Math.cos(angle+0.38)*9, ay-Math.sin(angle+0.38)*9);
+  ctx.closePath();
+  ctx.fillStyle = onPath
+    ? 'rgba(255,100,100,0.7)'
+    : (isDark ? 'rgba(100,170,240,0.38)' : 'rgba(40,100,200,0.32)');
+  ctx.fill();
+
+  // Edge label on hover
+  if (isHE && edgeLabel) {
+    const mid = bezierPoint(pa, cp, pb, 0.5);
+    ctx.font = '9px SF Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(edgeLabel).width;
+    ctx.fillStyle = isDark ? 'rgba(8,12,22,0.85)' : 'rgba(240,245,255,0.92)';
+    ctx.fillRect(mid.x - tw/2 - 5, mid.y - 9, tw+10, 17);
+    ctx.fillStyle = isDark ? 'rgba(180,220,255,0.9)' : 'rgba(30,80,160,0.9)';
+    ctx.fillText(edgeLabel, mid.x, mid.y);
+  }
+}
+
+function drawPulse(p) {
+  const rawA = positions[p.a], rawB = positions[p.b];
+  if (!rawA||!rawB) return;
+  const pa = worldToScreen(rawA.x, rawA.y);
+  const pb = worldToScreen(rawB.x, rawB.y);
+  const cp = bezierCP(pa, pb);
+  const pt = bezierPoint(pa, cp, pb, p.t);
+
+  const onPath = attackPath && attackPath.pathEdges.has(`${p.a}→${p.b}`);
+  const node   = GRAPH.nodes[p.a];
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, onPath ? 4.5 : 3, 0, Math.PI*2);
+  ctx.fillStyle = onPath ? '#ff6060' : node.color;
+  ctx.globalAlpha = 0.9 - Math.abs(p.t-0.5)*1.6;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawNode(id) {
+  const rawPos = positions[id];
+  if (!rawPos) return;
+  const pos  = worldToScreen(rawPos.x, rawPos.y);
+  const node = GRAPH.nodes[id];
+  const isCenter  = id === centerNodeId;
+  const isHovered = id === hoveredNode;
+  const onPath    = attackPath && attackPath.pathNodes.has(id);
+  const r = nodeRadius(id) * (isCenter ? 1.3 : 1) * zoom;
+  const glow = isDark ? node.glowD : node.glowL;
+
+  // Attack path outer pulse ring
+  if (onPath) {
+    const now = Date.now();
+    const pulse = 0.55 + 0.45*Math.sin(now*0.003 + id.length*0.7);
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, r + 10*pulse, 0, Math.PI*2);
+    ctx.strokeStyle = `rgba(255,60,60,${0.35*pulse})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Glow
+  if (isCenter || isHovered || onPath) {
+    const glowColor = onPath ? 'rgba(255,60,60,0.5)' : glow;
+    const gr = ctx.createRadialGradient(pos.x, pos.y, r*0.2, pos.x, pos.y, r*2.8);
+    gr.addColorStop(0, glowColor);
+    gr.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, r*2.8, 0, Math.PI*2);
+    ctx.fillStyle = gr;
+    ctx.fill();
+  }
+
+  // Center ring
+  if (isCenter) {
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, r+7, 0, Math.PI*2);
+    ctx.strokeStyle = node.color + '38';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Node fill
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, r, 0, Math.PI*2);
+  const bg = ctx.createRadialGradient(pos.x-r*0.28, pos.y-r*0.28, 0, pos.x, pos.y, r);
+  const fillAlpha = isDark ? (onPath ? 'ff' : 'cc') : (onPath ? 'ff' : 'dd');
+  bg.addColorStop(0, (onPath?'#ff6060':node.color) + fillAlpha);
+  bg.addColorStop(1, (onPath?'#aa0000':node.color) + '55');
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.strokeStyle = (isHovered||onPath) ? (onPath?'#ff8080':node.color) : node.color + '77';
+  ctx.lineWidth = (isHovered||onPath) ? 2.5 : 1.5;
+  ctx.stroke();
+
+  // Icon
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.92)' : '#fff';
+  ctx.font = `bold ${Math.max(8, r*0.42)}px monospace`;
+  ctx.fillText(TYPE_ICON[node.type]||'?', pos.x, pos.y);
+
+  // Label outside
+  const angle = isCenter ? -Math.PI/2 : Math.atan2(rawPos.y - canvas.height/2, rawPos.x - canvas.width/2);
+  const ldist = r + 46;
+  const lx = pos.x + Math.cos(angle)*ldist;
+  const ly = pos.y + Math.sin(angle)*ldist;
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `${isCenter ? '12px' : '10px'} SF Mono, monospace`;
+  ctx.fillStyle = onPath
+    ? '#ff8888'
+    : isCenter ? node.color
+    : isHovered ? (isDark?'#fff':'#000')
+    : (isDark?'rgba(255,255,255,0.78)':'rgba(0,0,60,0.72)');
+  ctx.fillText(node.label, lx, ly);
+
+  ctx.font = '8px monospace';
+  ctx.fillStyle = (onPath ? '#ff6060' : node.color) + (isDark?'99':'bb');
+  ctx.fillText(node.type.toUpperCase(), lx, ly+13);
+}
+
+// ─── MAIN LOOP ────────────────────────────────────────────────────────────────
+let lastTime = 0;
+function draw(ts) {
+  const dt = ts - lastTime; lastTime = ts;
+
+  // Tween positions
+  if (tween) {
+    tween.t += dt / tween.duration;
+    if (tween.t >= 1) { tween.t = 1; }
+    const e = easeInOut(tween.t);
+    Object.keys(tween.to).forEach(id => {
+      positions[id] = {
+        x: lerp(tween.from[id].x, tween.to[id].x, e),
+        y: lerp(tween.from[id].y, tween.to[id].y, e),
+      };
+    });
+    if (tween.t >= 1) tween = null;
+  }
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawGrid();
+
+  // Edges
+  GRAPH.edges.forEach(([a,b,lbl]) => {
+    if (positions[a] && positions[b]) drawEdge(a, b, lbl);
+  });
+
+  // Pulses
+  pulses.forEach(p => {
+    p.t += p.speed;
+    if (p.t >= 1) p.t = 0;
+    drawPulse(p);
+  });
+
+  // Nodes
+  Object.keys(positions).forEach(id => drawNode(id));
+
+  requestAnimationFrame(draw);
+}
+
+// ─── EDGE HOVER DETECTION ────────────────────────────────────────────────────
+function edgeDistSq(mx, my, a, b) {
+  const rawA = positions[a], rawB = positions[b];
+  if (!rawA||!rawB) return Infinity;
+  const pa = worldToScreen(rawA.x, rawA.y);
+  const pb = worldToScreen(rawB.x, rawB.y);
+  const cp = bezierCP(pa, pb);
+  let minD = Infinity;
+  for (let t=0; t<=1; t+=0.04) {
+    const pt = bezierPoint(pa, cp, pb, t);
+    const dx=mx-pt.x, dy=my-pt.y;
+    minD = Math.min(minD, dx*dx+dy*dy);
+  }
+  return minD;
+}
+
+// ─── NODE HIT TEST ────────────────────────────────────────────────────────────
+function getNodeAt(sx, sy) {
+  for (const [id, rawPos] of Object.entries(positions)) {
+    const pos = worldToScreen(rawPos.x, rawPos.y);
+    const dx=sx-pos.x, dy=sy-pos.y;
+    const r = nodeRadius(id)*(id===centerNodeId?1.3:1)*zoom + 5;
+    if (dx*dx+dy*dy <= r*r) return id;
+  }
+  return null;
+}
+
+// ─── INTERACTION ──────────────────────────────────────────────────────────────
+canvas.addEventListener('mousemove', e => {
+  const sx=e.clientX, sy=e.clientY;
+  const id = getNodeAt(sx, sy);
+  hoveredNode = id;
+  canvas.style.cursor = id ? 'pointer' : 'default';
+
+  // Edge hover (only if not on a node)
+  hoveredEdge = null;
+  if (!id) {
+    let bestD = 100, bestEdge = null;
+    GRAPH.edges.forEach(([a,b,lbl]) => {
+      if (!positions[a]||!positions[b]) return;
+      const d = Math.sqrt(edgeDistSq(sx, sy, a, b));
+      if (d < bestD) { bestD=d; bestEdge={a,b,label:lbl}; }
+    });
+    hoveredEdge = bestEdge;
+  }
+
+  // Attack path on CVE hover
+  if (id && GRAPH.nodes[id].type === 'cve') {
+    attackPath = traceAttackPath(id);
+    const chain = buildChainLabel(id);
+    pathBanner.style.display = 'block';
+    pathBanner.textContent = '⚠ ATTACK PATH: ' + chain;
+  } else if (!id) {
+    attackPath = null;
+    pathBanner.style.display = 'none';
+  }
+
+  // Tooltip
+  if (id) {
+    const node = GRAPH.nodes[id];
+    tooltip.style.display = 'block';
+    tooltip.style.left = (sx+16) + 'px';
+    tooltip.style.top  = (sy-12) + 'px';
+    let html = `<b style="color:${node.color}">${node.label}</b><br>${node.info.replace(/\n/g,'<br>')}`;
+    const links = connCount[id];
+    if (links) html += `<br><span style="opacity:.55">→ ${links} connection${links>1?'s':''}</span>`;
+    if (id!==centerNodeId && node.children.length>0) html += `<br><span style="opacity:.35;font-size:9px">click to drill in</span>`;
+    if (node.type==='cve') html += `<br><span style="color:#ff8080;font-size:9px">hover to trace attack path</span>`;
+    tooltip.innerHTML = html;
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  hoveredNode=null; hoveredEdge=null; attackPath=null;
+  pathBanner.style.display='none';
+  tooltip.style.display='none';
+});
+
+// Build readable chain string root → ... → CVE
+function buildChainLabel(cveId) {
+  const parent = {};
+  const visited = new Set();
+  const queue = [cveId];
+  parent[cveId] = null;
+  while (queue.length) {
+    const cur = queue.shift();
+    if (visited.has(cur)) continue;
+    visited.add(cur);
+    adjReverse[cur].forEach(p => { if (!parent.hasOwnProperty(p)) { parent[p]=cur; queue.push(p); } });
+  }
+  // Find path from root to cve
+  const rootId = 'root';
+  if (!visited.has(rootId)) return cveId;
+  const path = [];
+  let cur = rootId;
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    path.push(GRAPH.nodes[cur].label);
+    seen.add(cur);
+    cur = parent[cur];
+  }
+  return path.join(' → ');
+}
+
+canvas.addEventListener('click', e => {
+  const id = getNodeAt(e.clientX, e.clientY);
+  if (id && id!==centerNodeId && GRAPH.nodes[id].children.length>0) {
+    history.push(centerNodeId);
+    centerNodeId = id;
+    setBreadcrumb(id);
+    updateBackBtn();
+    layout(true); // animated
+  }
+});
+
+// ─── ZOOM ────────────────────────────────────────────────────────────────────
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.1 : 0.91;
+  const wx = e.clientX, wy = e.clientY;
+  const before = screenToWorld(wx, wy);
+  zoom = Math.max(0.3, Math.min(3.5, zoom * factor));
+  const after = screenToWorld(wx, wy);
+  panX += (after.x - before.x) * zoom;
+  panY += (after.y - before.y) * zoom;
+
+  // Show zoom %
+  zoomLabel.textContent = Math.round(zoom*100) + '%';
+  zoomLabel.style.opacity = '1';
+  clearTimeout(zoomTimeout);
+  zoomTimeout = setTimeout(() => { zoomLabel.style.opacity='0'; }, 1200);
+}, { passive: false });
+
+// ─── KEYBOARD ────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape'||e.key==='ArrowLeft') goBack();
+  if (e.key==='r'||e.key==='R') doReset();
+  if (e.key==='s'||e.key==='S') exportPNG();
+});
+
+// ─── CONTROLS ────────────────────────────────────────────────────────────────
+function updateBackBtn() { document.getElementById('back').disabled = history.length===0; }
+function setBreadcrumb(id) {
+  const label = id==='root' ? 'KNOWLEDGE GRAPH' : GRAPH.nodes[id].label.toUpperCase();
+  document.getElementById('breadcrumb').textContent = `SYNAPSE · ${label}`;
+}
+function goBack() {
+  if (!history.length) return;
+  centerNodeId = history.pop();
+  setBreadcrumb(centerNodeId);
+  updateBackBtn();
+  layout(true);
+}
+function doReset() {
+  history=[]; centerNodeId='root';
+  setBreadcrumb('root'); updateBackBtn();
+  zoom=1; panX=0; panY=0;
+  layout(true);
+}
+function exportPNG() {
+  const link = document.createElement('a');
+  link.download = 'synapse_graph.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
+
+document.getElementById('back').addEventListener('click', goBack);
+document.getElementById('reset').addEventListener('click', doReset);
+document.getElementById('export').addEventListener('click', exportPNG);
+
+// ─── START ────────────────────────────────────────────────────────────────────
+layout(false);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

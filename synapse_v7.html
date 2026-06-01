@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SYNAPSE — Knowledge Graph</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0d14; overflow: hidden; font-family: 'SF Mono', 'Fira Code', monospace; }
+  canvas { display: block; }
+  #tooltip {
+    position: absolute;
+    background: rgba(10,13,20,0.92);
+    border: 1px solid rgba(100,200,255,0.3);
+    border-radius: 6px;
+    color: #a0d4ff;
+    font-size: 11px;
+    padding: 8px 12px;
+    pointer-events: none;
+    display: none;
+    max-width: 200px;
+    line-height: 1.6;
+  }
+  #breadcrumb {
+    position: absolute;
+    top: 12px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; color: rgba(100,180,255,0.5);
+    letter-spacing: 1px;
+  }
+  #controls {
+    position: absolute;
+    bottom: 14px; right: 14px;
+    display: flex; gap: 8px;
+  }
+  #controls button {
+    background: rgba(100,180,255,0.08);
+    border: 1px solid rgba(100,180,255,0.25);
+    border-radius: 5px;
+    color: rgba(100,180,255,0.7);
+    font-size: 10px;
+    padding: 5px 12px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: all 0.2s;
+    font-family: 'SF Mono', monospace;
+  }
+  #controls button:hover:not(:disabled) { background: rgba(100,180,255,0.18); }
+  #controls button:disabled { opacity: 0.25; cursor: default; }
+  #legend {
+    position: absolute;
+    bottom: 14px; left: 14px;
+    font-size: 9px;
+    color: rgba(255,255,255,0.35);
+    line-height: 1.9;
+    letter-spacing: 0.5px;
+  }
+  .leg { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="tooltip"></div>
+<div id="breadcrumb">SYNAPSE · KNOWLEDGE GRAPH</div>
+<div id="controls">
+  <button id="back" disabled>&#8592; BACK</button>
+  <button id="reset">RESET</button>
+</div>
+<div id="legend">
+  <div class="leg"><div class="dot" style="background:#5bc8ff"></div> FILE</div>
+  <div class="leg"><div class="dot" style="background:#7fd4a0"></div> FUNCTION</div>
+  <div class="leg"><div class="dot" style="background:#ffb347"></div> LIBRARY</div>
+  <div class="leg"><div class="dot" style="background:#ff5c5c"></div> CVE</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', () => { resize(); layout(); });
+
+// ─── DATA ────────────────────────────────────────────────────────────────────
+const GRAPH = {
+  nodes: {
+    root: {
+      id: 'root', label: 'auth.py', type: 'file',
+      color: '#5bc8ff', glow: 'rgba(91,200,255,0.5)',
+      info: 'Entry: auth module', children: ['login_user', 'validate_token', 'db', 'requests']
+    },
+    login_user: {
+      id: 'login_user', label: 'login_user()', type: 'function',
+      color: '#7fd4a0', glow: 'rgba(127,212,160,0.45)',
+      info: 'Handles user login flow', children: ['requests', 'sql_query']
+    },
+    validate_token: {
+      id: 'validate_token', label: 'validate_token()', type: 'function',
+      color: '#7fd4a0', glow: 'rgba(127,212,160,0.45)',
+      info: 'JWT validation logic', children: ['jwt_lib']
+    },
+    db: {
+      id: 'db', label: 'db.py', type: 'file',
+      color: '#5bc8ff', glow: 'rgba(91,200,255,0.5)',
+      info: 'Database connector', children: ['sql_query']
+    },
+    requests: {
+      id: 'requests', label: 'requests', type: 'library',
+      color: '#ffb347', glow: 'rgba(255,179,71,0.45)',
+      info: 'v2.28.0 — HTTP client', children: ['urllib3', 'certifi']
+    },
+    sql_query: {
+      id: 'sql_query', label: 'sql_query()', type: 'function',
+      color: '#7fd4a0', glow: 'rgba(127,212,160,0.45)',
+      info: 'Raw SQL execution', children: ['cve_sqli']
+    },
+    jwt_lib: {
+      id: 'jwt_lib', label: 'PyJWT', type: 'library',
+      color: '#ffb347', glow: 'rgba(255,179,71,0.45)',
+      info: 'v2.4.0 — JWT library', children: []
+    },
+    urllib3: {
+      id: 'urllib3', label: 'urllib3', type: 'library',
+      color: '#ffb347', glow: 'rgba(255,179,71,0.45)',
+      info: 'v1.26.5 — HTTP core', children: ['cve_urllib3']
+    },
+    certifi: {
+      id: 'certifi', label: 'certifi', type: 'library',
+      color: '#ffb347', glow: 'rgba(255,179,71,0.45)',
+      info: 'CA bundle library', children: []
+    },
+    cve_sqli: {
+      id: 'cve_sqli', label: 'CVE-2023-1671', type: 'cve',
+      color: '#ff5c5c', glow: 'rgba(255,92,92,0.55)',
+      info: 'SQL Injection\nSeverity: CRITICAL\nCWE-89', children: []
+    },
+    cve_urllib3: {
+      id: 'cve_urllib3', label: 'CVE-2021-33503', type: 'cve',
+      color: '#ff5c5c', glow: 'rgba(255,92,92,0.55)',
+      info: 'ReDoS via urllib3\nSeverity: HIGH\nCWE-400', children: []
+    },
+  },
+  edges: [
+    ['root','login_user'],['root','validate_token'],['root','db'],['root','requests'],
+    ['login_user','requests'],['login_user','sql_query'],
+    ['validate_token','jwt_lib'],
+    ['db','sql_query'],
+    ['requests','urllib3'],['requests','certifi'],
+    ['sql_query','cve_sqli'],
+    ['urllib3','cve_urllib3'],
+  ]
+};
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let centerNodeId = 'root';
+let history = [];
+let positions = {};
+let pulses = [];
+let hoveredNode = null;
+
+function getConnectedIds(nodeId) {
+  const ids = new Set();
+  ids.add(nodeId);
+  GRAPH.edges.forEach(([a,b]) => {
+    if (a === nodeId) ids.add(b);
+    if (b === nodeId) ids.add(a);
+  });
+  return [...ids];
+}
+
+// ─── LAYOUT ──────────────────────────────────────────────────────────────────
+function layout() {
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2;
+
+  const visibleIds = getConnectedIds(centerNodeId);
+  const neighbours = visibleIds.filter(id => id !== centerNodeId);
+  const n = neighbours.length;
+
+  const R = Math.min(W, H) * 0.33;
+  positions = {};
+  positions[centerNodeId] = { x: cx, y: cy };
+
+  neighbours.forEach((id, i) => {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    positions[id] = {
+      x: cx + Math.cos(angle) * R,
+      y: cy + Math.sin(angle) * R
+    };
+  });
+
+  pulses = [];
+  GRAPH.edges.forEach(([a, b]) => {
+    if (positions[a] && positions[b]) {
+      pulses.push({ a, b, t: Math.random(), speed: 0.004 + Math.random() * 0.003 });
+    }
+  });
+}
+
+// ─── DRAW ─────────────────────────────────────────────────────────────────────
+const NODE_R = 26;
+const LABEL_DIST = 48;
+
+function drawEdge(a, b) {
+  const pa = positions[a], pb = positions[b];
+  if (!pa || !pb) return;
+
+  const mx = (pa.x + pb.x) / 2;
+  const my = (pa.y + pb.y) / 2;
+  const dx = pb.x - pa.x, dy = pb.y - pa.y;
+  const len = Math.sqrt(dx*dx + dy*dy) || 1;
+  const bend = len * 0.12;
+  const cpx = mx - (dy/len)*bend;
+  const cpy = my + (dx/len)*bend;
+
+  ctx.beginPath();
+  ctx.moveTo(pa.x, pa.y);
+  ctx.quadraticCurveTo(cpx, cpy, pb.x, pb.y);
+  ctx.strokeStyle = 'rgba(80,140,200,0.25)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  const angle = Math.atan2(pb.y - cpy, pb.x - cpx);
+  const ax = pb.x - Math.cos(angle) * NODE_R;
+  const ay = pb.y - Math.sin(angle) * NODE_R;
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(ax - Math.cos(angle - 0.35) * 8, ay - Math.sin(angle - 0.35) * 8);
+  ctx.lineTo(ax - Math.cos(angle + 0.35) * 8, ay - Math.sin(angle + 0.35) * 8);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(80,160,220,0.35)';
+  ctx.fill();
+}
+
+function drawPulse(p) {
+  const pa = positions[p.a], pb = positions[p.b];
+  if (!pa || !pb) return;
+  const mx = (pa.x + pb.x) / 2;
+  const my = (pa.y + pb.y) / 2;
+  const dx = pb.x - pa.x, dy = pb.y - pa.y;
+  const len = Math.sqrt(dx*dx + dy*dy) || 1;
+  const bend = len * 0.12;
+  const cpx = mx - (dy/len)*bend;
+  const cpy = my + (dx/len)*bend;
+
+  const t = p.t;
+  const px = (1-t)*(1-t)*pa.x + 2*(1-t)*t*cpx + t*t*pb.x;
+  const py = (1-t)*(1-t)*pa.y + 2*(1-t)*t*cpy + t*t*pb.y;
+
+  const na = GRAPH.nodes[p.a];
+  ctx.beginPath();
+  ctx.arc(px, py, 3, 0, Math.PI*2);
+  ctx.fillStyle = na ? na.color : '#88bbff';
+  ctx.globalAlpha = 0.8 - Math.abs(t - 0.5) * 0.8;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawNode(id) {
+  const pos = positions[id];
+  if (!pos) return;
+  const node = GRAPH.nodes[id];
+  const isCenter = id === centerNodeId;
+  const isHovered = id === hoveredNode;
+  const r = isCenter ? NODE_R * 1.35 : NODE_R;
+
+  if (isCenter || isHovered) {
+    const grad = ctx.createRadialGradient(pos.x, pos.y, r*0.3, pos.x, pos.y, r*2.5);
+    grad.addColorStop(0, node.glow);
+    grad.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, r*2.5, 0, Math.PI*2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+
+  if (isCenter) {
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, r + 6, 0, Math.PI*2);
+    ctx.strokeStyle = node.color + '44';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, r, 0, Math.PI*2);
+  const bg = ctx.createRadialGradient(pos.x-r*0.25, pos.y-r*0.25, 0, pos.x, pos.y, r);
+  bg.addColorStop(0, node.color + 'cc');
+  bg.addColorStop(1, node.color + '55');
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.strokeStyle = node.color + 'aa';
+  ctx.lineWidth = isHovered ? 2 : 1;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${isCenter ? 13 : 11}px sans-serif`;
+  const icon = { file:'F', function:'ƒ', library:'L', cve:'!' }[node.type] || '·';
+  ctx.fillText(icon, pos.x, pos.y);
+
+  const angle = isCenter ? 0 : Math.atan2(pos.y - canvas.height/2, pos.x - canvas.width/2);
+  const lx = pos.x + Math.cos(angle) * (r + LABEL_DIST);
+  const ly = pos.y + Math.sin(angle) * (r + LABEL_DIST);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `${isCenter ? '12px' : '10px'} 'SF Mono', monospace`;
+  ctx.fillStyle = isCenter ? node.color : (isHovered ? '#fff' : 'rgba(255,255,255,0.75)');
+  ctx.fillText(node.label, lx, ly);
+
+  ctx.font = '8px monospace';
+  ctx.fillStyle = node.color + '88';
+  ctx.fillText(node.type.toUpperCase(), lx, ly + 13);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.025)';
+  ctx.lineWidth = 0.5;
+  const step = 40;
+  for (let x = 0; x < canvas.width; x += step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+  for (let y = 0; y < canvas.height; y += step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+
+  GRAPH.edges.forEach(([a,b]) => { if (positions[a] && positions[b]) drawEdge(a, b); });
+
+  pulses.forEach(p => {
+    p.t += p.speed;
+    if (p.t >= 1) p.t = 0;
+    drawPulse(p);
+  });
+
+  Object.keys(positions).forEach(id => drawNode(id));
+
+  requestAnimationFrame(draw);
+}
+
+// ─── INTERACTION ──────────────────────────────────────────────────────────────
+function getNodeAt(mx, my) {
+  for (const [id, pos] of Object.entries(positions)) {
+    const dx = mx - pos.x, dy = my - pos.y;
+    const isCenter = id === centerNodeId;
+    const r = isCenter ? NODE_R * 1.35 + 4 : NODE_R + 4;
+    if (dx*dx + dy*dy <= r*r) return id;
+  }
+  return null;
+}
+
+canvas.addEventListener('mousemove', e => {
+  const id = getNodeAt(e.clientX, e.clientY);
+  hoveredNode = id;
+  canvas.style.cursor = id ? 'pointer' : 'default';
+  if (id) {
+    const node = GRAPH.nodes[id];
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 14) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+    tooltip.innerHTML = `<b style="color:${node.color}">${node.label}</b><br>${node.info.replace(/\n/g,'<br>')}`;
+    if (node.children.length) tooltip.innerHTML += `<br><span style="opacity:.6">&#8594; ${node.children.length} connection${node.children.length>1?'s':''}</span>`;
+    if (id !== centerNodeId && node.children.length > 0) tooltip.innerHTML += `<br><span style="opacity:.45;font-size:9px">click to focus</span>`;
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+
+function updateBackBtn() {
+  document.getElementById('back').disabled = history.length === 0;
+}
+
+canvas.addEventListener('click', e => {
+  const id = getNodeAt(e.clientX, e.clientY);
+  if (id && id !== centerNodeId && GRAPH.nodes[id].children.length > 0) {
+    history.push(centerNodeId);
+    centerNodeId = id;
+    document.getElementById('breadcrumb').textContent = `SYNAPSE · ${GRAPH.nodes[id].label.toUpperCase()}`;
+    updateBackBtn();
+    layout();
+  }
+});
+
+document.getElementById('back').addEventListener('click', () => {
+  if (history.length === 0) return;
+  centerNodeId = history.pop();
+  const label = centerNodeId === 'root' ? 'KNOWLEDGE GRAPH' : GRAPH.nodes[centerNodeId].label.toUpperCase();
+  document.getElementById('breadcrumb').textContent = `SYNAPSE · ${label}`;
+  updateBackBtn();
+  layout();
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  history = [];
+  centerNodeId = 'root';
+  document.getElementById('breadcrumb').textContent = 'SYNAPSE · KNOWLEDGE GRAPH';
+  updateBackBtn();
+  layout();
+});
+
+layout();
+draw();
+</script>
+</body>
+</html>
