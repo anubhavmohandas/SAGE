@@ -22,6 +22,9 @@ from sage.config import cfg
 from sage.fetcher.nvd    import fetch_cves_since, fetch_cve_by_id
 from sage.fetcher.filter import detect_stack, filter_relevant_cves
 from sage.fetcher.store  import init_db, save_cves, get_new_cves, get_summary
+from sage.synapse.parser import parse_repo
+from sage.synapse.mapper import attach_cves, get_blast_radius
+from sage.synapse.export import export_graph
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -84,10 +87,52 @@ def run_fetch(repo_path: str, days: int = 1):
             m = entry.get("sage_match", {})
             print(f"    [{m.get('severity', '?'):8s}] {m.get('cve_id', '?')} "
                   f"→ {m.get('package', '?')} {m.get('installed_version', '?')}")
-        print(f"\n  Next step: run the analyzer to confirm and generate patches.")
+        print(f"\n  Next step: building Synapse knowledge graph...")
+        print(f"{'='*60}\n")
+
+        # Step 5 — Build Synapse knowledge graph
+        run_synapse(repo_path)
     else:
         print(f"\n  No relevant CVEs found. Your stack looks clean for this period.")
+        print(f"{'='*60}\n")
 
+
+def run_synapse(repo_path: str):
+    """
+    Build the Synapse knowledge graph for a repo.
+    Parses code, attaches CVEs, exports synapse_graph.json.
+    """
+    print(f"{'='*60}")
+    print(f"  SYNAPSE — Knowledge Graph Builder")
+    print(f"{'='*60}\n")
+
+    # Step 1 — Parse codebase
+    print("[SAGE] Synapse Step 1/3 — Parsing codebase...")
+    G = parse_repo(repo_path)
+
+    # Step 2 — Attach CVEs from DB
+    print("\n[SAGE] Synapse Step 2/3 — Attaching CVE nodes...")
+    G = attach_cves(G)
+
+    # Step 3 — Export to JSON for visualization
+    print("\n[SAGE] Synapse Step 3/3 — Exporting graph...")
+    out_path = export_graph(G)
+
+    # Show blast radius for each CVE
+    cve_nodes = [n for n in G.nodes() if n.startswith("cve:")]
+    if cve_nodes:
+        print(f"\n[SAGE] Blast radius analysis:")
+        for cve_node in cve_nodes[:10]:  # Show first 10
+            blast = get_blast_radius(G, cve_node)
+            if blast:
+                print(f"  {blast['cve_id']:20s} → "
+                      f"{blast['affected_library']:15s} | "
+                      f"{len(blast['exposed_files'])} files, "
+                      f"{len(blast['exposed_functions'])} functions exposed")
+
+    print(f"\n{'='*60}")
+    print(f"  Graph ready → {out_path}")
+    print(f"  Open synapse.html and load this file to visualize.")
     print(f"{'='*60}\n")
 
 
@@ -134,10 +179,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="SAGE — Security Analysis & Graph Engine"
     )
-    parser.add_argument("--repo",   type=str, help="Path to repo to scan")
-    parser.add_argument("--days",   type=int, default=1, help="Days of CVEs to fetch (default: 1)")
-    parser.add_argument("--cve",    type=str, help="Look up a specific CVE by ID")
-    parser.add_argument("--status", action="store_true", help="Show pipeline status")
+    parser.add_argument("--repo",    type=str, help="Path to repo to scan")
+    parser.add_argument("--days",    type=int, default=1, help="Days of CVEs to fetch (default: 1)")
+    parser.add_argument("--cve",     type=str, help="Look up a specific CVE by ID")
+    parser.add_argument("--status",  action="store_true", help="Show pipeline status")
+    parser.add_argument("--synapse", type=str, help="Build Synapse graph for a repo (skip CVE fetch)")
 
     args = parser.parse_args()
 
@@ -148,6 +194,8 @@ def main():
         run_status()
     elif args.cve:
         run_single_cve(args.cve)
+    elif args.synapse:
+        run_synapse(args.synapse)
     elif args.repo:
         run_fetch(args.repo, days=args.days)
     else:

@@ -27,3 +27,8 @@ jsonschema==4.23.0
 
 # Database
 # sqlite3 is built into Python stdlib — no install needed
+
+# Synapse — codebase parsing + knowledge graph
+graphifyy==0.1.6         # tree-sitter based codebase parser
+tree-sitter==0.21.3      # AST parser core
+tree-sitter-python==0.21.0  # Python language grammar for tree-sitter
