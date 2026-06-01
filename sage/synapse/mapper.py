@@ -87,17 +87,13 @@ def attach_cves(G: nx.DiGraph) -> nx.DiGraph:
         cve_node_id = f"cve:{cve_id}"
         color = SEVERITY_COLOR.get(severity, SEVERITY_COLOR["UNKNOWN"])
 
-        G.add_node(cve_node_id, {
-            "id":       cve_node_id,
-            "label":    cve_id,
-            "type":     "cve",
-            "color":    color,
-            "severity": severity,
-            "package":  package,
-            "affected_range": cve_row.get("affected_range", ""),
-            "info":     f"{severity} severity\nAffects: {package} {cve_row.get('affected_range', '')}",
-            "children": [],
-        })
+        G.add_node(cve_node_id,
+            id=cve_node_id, label=cve_id, type="cve", color=color,
+            severity=severity, package=package,
+            affected_range=cve_row.get("affected_range", ""),
+            info=f"{severity} severity\nAffects: {package} {cve_row.get('affected_range', '')}",
+            children=[],
+        )
 
         # Add AFFECTS edge: library → CVE
         G.add_edge(target_lib, cve_node_id, label="AFFECTS")

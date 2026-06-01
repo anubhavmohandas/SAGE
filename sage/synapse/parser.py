@@ -117,12 +117,7 @@ def _parse_file(G: nx.DiGraph, file_path: Path, repo_root: Path, parser):
     file_id  = f"file:{rel_path}"
 
     # Add file node
-    G.add_node(file_id, {
-        "id":    file_id,
-        "label": rel_path,
-        "type":  "file",
-        "path":  str(file_path),
-    })
+    G.add_node(file_id, id=file_id, label=rel_path, type="file", path=str(file_path))
 
     # Read file content
     try:
@@ -157,11 +152,7 @@ def _extract_imports(G: nx.DiGraph, root, source: bytes, file_id: str):
             if module_name and not module_name.startswith("."):
                 lib_id = f"lib:{module_name}"
                 if not G.has_node(lib_id):
-                    G.add_node(lib_id, {
-                        "id":    lib_id,
-                        "label": module_name,
-                        "type":  "library",
-                    })
+                    G.add_node(lib_id, id=lib_id, label=module_name, type="library")
                 if not G.has_edge(file_id, lib_id):
                     G.add_edge(file_id, lib_id, label="IMPORTS")
 
@@ -190,14 +181,10 @@ def _extract_functions(G: nx.DiGraph, root, source: bytes,
             func_name = _get_node_text(func_node, source, "name")
             if func_name:
                 func_id = f"func:{rel_path}:{func_name}"
-                G.add_node(func_id, {
-                    "id":       func_id,
-                    "label":    f"{func_name}()",
-                    "type":     "function",
-                    "file":     rel_path,
-                    "name":     func_name,
-                    "line":     func_node.start_point[0] + 1,
-                })
+                G.add_node(func_id,
+                    id=func_id, label=f"{func_name}()", type="function",
+                    file=rel_path, name=func_name, line=func_node.start_point[0]+1
+                )
                 # File CONTAINS function
                 G.add_edge(file_id, func_id, label="CONTAINS")
 
@@ -302,7 +289,7 @@ def _parse_repo_basic(repo_path: str) -> nx.DiGraph:
     for py_file in py_files:
         rel_path = str(py_file.relative_to(path))
         file_id  = f"file:{rel_path}"
-        G.add_node(file_id, {"id": file_id, "label": rel_path, "type": "file"})
+        G.add_node(file_id, id=file_id, label=rel_path, type="file")
 
         try:
             text = py_file.read_text(errors="ignore")
@@ -314,7 +301,7 @@ def _parse_repo_basic(repo_path: str) -> nx.DiGraph:
             if module:
                 lib_id = f"lib:{module}"
                 if not G.has_node(lib_id):
-                    G.add_node(lib_id, {"id": lib_id, "label": module, "type": "library"})
+                    G.add_node(lib_id, id=lib_id, label=module, type="library")
                 G.add_edge(file_id, lib_id, label="IMPORTS")
 
     print(f"[synapse] Basic graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
