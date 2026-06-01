@@ -19,6 +19,8 @@ build/
 venv/
 env/
 .venv/
+.env.example
+env*/
 
 # Database
 *.db
