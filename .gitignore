@@ -25,9 +25,16 @@ env/
 *.sqlite
 *.sqlite3
 
-# SAGE runtime output
+# SAGE runtime output — never commit
 data/
 outputs/
+demos/
+
+# synapse_graphs — only demo.html is public, everything else private
+synapse_graphs/*
+!synapse_graphs/demo.html
+
+# JSON ignored globally
 *.json
 !.env.example
 
@@ -42,5 +49,6 @@ Thumbs.db
 *.swo
 
 
-
+# Files to be ignored
 SAGE_Project_Brief.docx
+*synapse.html

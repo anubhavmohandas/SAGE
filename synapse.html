@@ -66,8 +66,9 @@
     letter-spacing: 0.5px; transition: all 0.2s;
     font-family: 'SF Mono', monospace;
   }
-  body.dark  #controls button { background: rgba(100,180,255,0.08); border: 1px solid rgba(100,180,255,0.22); color: rgba(120,190,255,0.75); }
-  body.light #controls button { background: rgba(40,100,200,0.07); border: 1px solid rgba(40,100,200,0.22); color: rgba(30,80,160,0.8); }
+  body.dark  #controls button, #load-btn { background: rgba(100,180,255,0.08); border: 1px solid rgba(100,180,255,0.22); color: rgba(120,190,255,0.75); }
+  body.light #controls button, #load-btn { background: rgba(40,100,200,0.07); border: 1px solid rgba(40,100,200,0.22); color: rgba(30,80,160,0.8); }
+  #load-btn { border-radius: 5px; font-size: 10px; padding: 5px 13px; cursor: pointer; letter-spacing: 0.5px; font-family: 'SF Mono', monospace; transition: all 0.2s; }
   body.dark  #controls button:hover:not(:disabled) { background: rgba(100,180,255,0.18); }
   body.light #controls button:hover:not(:disabled) { background: rgba(40,100,200,0.15); }
   #controls button:disabled { opacity: 0.22; cursor: default; }
@@ -109,6 +110,9 @@
   <button id="back" disabled>← BACK</button>
   <button id="reset">RESET</button>
   <button id="export">SAVE PNG</button>
+  <label id="load-btn" title="Load synapse_graph.json">LOAD GRAPH
+    <input type="file" id="load-input" accept=".json" style="display:none">
+  </label>
   <button id="theme-toggle" title="Toggle theme">☀️</button>
 </div>
 
@@ -683,6 +687,78 @@ function exportPNG() {
 document.getElementById('back').addEventListener('click', goBack);
 document.getElementById('reset').addEventListener('click', doReset);
 document.getElementById('export').addEventListener('click', exportPNG);
+
+// ─── LOAD GRAPH FROM JSON ────────────────────────────────────────────────────
+document.getElementById('load-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      loadGraphData(data);
+    } catch(err) {
+      alert('Invalid JSON file: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+});
+
+function loadGraphData(data) {
+  // Clear existing graph
+  GRAPH.nodes = {};
+  GRAPH.edges = [];
+
+  // Load nodes
+  (data.nodes || []).forEach(n => {
+    GRAPH.nodes[n.id] = {
+      id:       n.id,
+      label:    n.label || n.id,
+      type:     n.type  || 'unknown',
+      color:    n.color || TYPE_COLORS[n.type] || '#888',
+      glowD:    (n.color || '#888') + '77',
+      glowL:    (n.color || '#888') + '44',
+      info:     n.info  || '',
+      children: n.children || [],
+    };
+  });
+
+  // Load edges (node_link_data uses 'links' or 'edges')
+  const edgeList = data.links || data.edges || [];
+  edgeList.forEach(e => {
+    GRAPH.edges.push([e.source, e.target, e.label || '']);
+  });
+
+  // Rebuild adjacency
+  Object.keys(GRAPH.nodes).forEach(id => adjReverse[id] = []);
+  GRAPH.edges.forEach(([a, b]) => {
+    if (!adjReverse[b]) adjReverse[b] = [];
+    adjReverse[b].push(a);
+  });
+
+  // Find a good root — prefer file nodes or the most connected node
+  const fileNodes = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'file');
+  centerNodeId = fileNodes.length > 0 ? fileNodes[0] : Object.keys(GRAPH.nodes)[0];
+  history = [];
+  attackPath = null;
+  pathBanner.style.display = 'none';
+  setBreadcrumb(centerNodeId);
+  updateBackBtn();
+  layout(false);
+
+  const total = Object.keys(GRAPH.nodes).length;
+  document.getElementById('breadcrumb').textContent =
+    `SYNAPSE · LOADED · ${total} nodes`;
+  console.log(`[synapse] Loaded graph: ${total} nodes, ${GRAPH.edges.length} edges`);
+}
+
+// Type colors for loaded nodes
+const TYPE_COLORS = {
+  file:     '#5bc8ff',
+  function: '#4db87a',
+  library:  '#e8960a',
+  cve:      '#ff4444',
+};
 
 // ─── START ────────────────────────────────────────────────────────────────────
 layout(false);
