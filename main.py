@@ -25,6 +25,7 @@ from sage.fetcher.store  import init_db, save_cves, get_new_cves, get_summary
 from sage.synapse.parser import parse_repo
 from sage.synapse.mapper import attach_cves, get_blast_radius
 from sage.synapse.export import export_graph
+from sage.scanner.semgrep import scan_blast_radius, save_findings, print_findings_summary
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -134,6 +135,15 @@ def run_synapse(repo_path: str):
     print(f"  Graph ready → {out_path}")
     print(f"  Open synapse.html and load this file to visualize.")
     print(f"{'='*60}\n")
+
+    # Step 4 — Run Semgrep on blast radius
+    print(f"{'='*60}")
+    print(f"  SCANNER — Semgrep Static Analysis")
+    print(f"{'='*60}\n")
+    print("[SAGE] Scanner Step 1/1 — Running Semgrep on exposed functions...")
+    findings = scan_blast_radius(G, repo_path)
+    save_findings(findings)
+    print_findings_summary(findings)
 
 
 def run_single_cve(cve_id: str):

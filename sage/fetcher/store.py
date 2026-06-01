@@ -63,12 +63,20 @@ def init_db():
             package         TEXT,
             installed_ver   TEXT,
             affected_range  TEXT,
+            cwe             TEXT,
             status          TEXT DEFAULT 'new',
             raw_json        TEXT,
             created_at      TEXT,
             updated_at      TEXT
         )
     """)
+
+    # Add cwe column if upgrading from older schema
+    try:
+        conn.execute("ALTER TABLE cves ADD COLUMN cwe TEXT")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
 
     # Index for fast status lookups — we'll query "WHERE status = 'new'" often
     conn.execute("""
@@ -95,19 +103,21 @@ def save_cve(cve_entry: dict):
     cve_id   = cve.get("id", "UNKNOWN")
     match    = cve_entry.get("sage_match", {})
     now      = datetime.now(timezone.utc).isoformat()
+    cwe      = _extract_cwe(cve)
 
     conn = _get_connection()
     conn.execute("""
         INSERT OR IGNORE INTO cves
             (cve_id, severity, package, installed_ver, affected_range,
-             status, raw_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?)
+             cwe, status, raw_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?)
     """, (
         cve_id,
         match.get("severity", "UNKNOWN"),
         match.get("package", ""),
         match.get("installed_version", ""),
         match.get("affected_range", ""),
+        cwe,
         json.dumps(cve_entry),
         now,
         now,
@@ -136,6 +146,23 @@ def is_known(cve_id: str) -> bool:
     ).fetchone()
     conn.close()
     return row is not None
+
+
+def _extract_cwe(cve: dict) -> str:
+    """
+    Extract CWE ID from NVD CVE record.
+    NVD stores CWEs in cve.weaknesses[].description[].value
+    e.g. "CWE-89", "CWE-400"
+    """
+    try:
+        for weakness in cve.get("weaknesses", []):
+            for desc in weakness.get("description", []):
+                val = desc.get("value", "")
+                if val.startswith("CWE-") and val != "CWE-noinfo" and val != "CWE-Other":
+                    return val
+    except Exception:
+        pass
+    return ""
 
 
 def get_new_cves() -> list[dict]:
