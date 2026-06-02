@@ -146,8 +146,13 @@ def analyze_single_cve(
     # Extract actual function code from repo
     function_codes = _extract_function_codes(exposed_functions, repo_path, G)
 
+    # If no function-level codes (USES edges incomplete), fall back to file-level
+    if not function_codes and exposed_files:
+        function_codes = _extract_file_snippets(exposed_files, repo_path, package)
+
+    # Still nothing — skip (library not actually used in any file we can read)
     if not function_codes and not findings:
-        # Nothing to analyze — skip
+        print(f"[analyzer] {cve_id} — no code to analyze, skipping")
         return None
 
     # Build the prompt
@@ -308,7 +313,7 @@ def _call_gemini(prompt: str, cve_id: str) -> Optional[dict]:
         import google.generativeai as genai
         genai.configure(api_key=cfg.GEMINI_API_KEY)
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-2.0-flash",
             generation_config={"temperature": 0.2, "max_output_tokens": 1024},
         )
         response = model.generate_content(prompt)
@@ -316,7 +321,7 @@ def _call_gemini(prompt: str, cve_id: str) -> Optional[dict]:
         raw = _strip_fences(raw)
         result = json.loads(raw)
         print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
-              f"confidence={result.get('confidence', 0):.2f}")
+              f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
         return result
     except ImportError:
         print("[analyzer] google-generativeai not installed. Run: pip3 install google-generativeai")
@@ -342,6 +347,41 @@ def _strip_fences(raw: str) -> str:
 
 
 # ─── Code extraction ──────────────────────────────────────────────────────────
+
+def _extract_file_snippets(exposed_files: list[str], repo_path: str, package: str) -> list[dict]:
+    """
+    Fallback when USES edges are missing — extract lines from exposed files
+    that actually reference the affected library.
+    Sends only relevant lines to LLM, not full file.
+    """
+    import re
+    results = []
+    for rel_file in exposed_files[:3]:
+        abs_path = Path(repo_path) / rel_file
+        if not abs_path.exists():
+            continue
+        try:
+            lines = abs_path.read_text(errors="ignore").splitlines()
+            # Find lines referencing the package
+            pkg_clean = package.replace("_", "-").lower()
+            relevant = []
+            for i, line in enumerate(lines):
+                if package.lower() in line.lower() or pkg_clean in line.lower():
+                    start = max(0, i-2)
+                    end   = min(len(lines), i+5)
+                    relevant.extend(lines[start:end])
+                    relevant.append("...")
+            if relevant:
+                results.append({
+                    "file":     rel_file,
+                    "function": f"(file-level usage of {package})",
+                    "line":     0,
+                    "code":     "\n".join(relevant[:40]),  # max 40 lines
+                })
+        except Exception:
+            continue
+    return results
+
 
 def _extract_function_codes(
     exposed_functions: list[str],
