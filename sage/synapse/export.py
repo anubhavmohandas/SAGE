@@ -67,14 +67,15 @@ def export_graph(G: nx.DiGraph, output_path: Optional[str] = None) -> str:
     out = Path(output_path) if output_path else OUTPUT_PATH
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    # Remove stdlib/noise libraries — not security relevant
+    G = _filter_graph(G)
+
     # Enrich nodes with display data
     _enrich_nodes(G)
 
     # Convert to node_link_data format
-    data = json_graph.node_link_data(G)
+    data = json_graph.node_link_data(G, edges="links")
 
-    # Rename 'links' edges to include our label field
-    # and clean up NetworkX internal fields
     nodes = []
     for node in data.get("nodes", []):
         node_id   = node.get("id", "")
@@ -87,8 +88,11 @@ def export_graph(G: nx.DiGraph, output_path: Optional[str] = None) -> str:
             "info":     node_data.get("info", ""),
             "children": node_data.get("children", []),
             "severity": node_data.get("severity", ""),
+            "package":  node_data.get("package", ""),
+            "cwe":      node_data.get("cwe", ""),
             "file":     node_data.get("file", ""),
             "line":     node_data.get("line", 0),
+            "stdlib":   node_data.get("stdlib", False),
         })
 
     links = []
@@ -112,6 +116,48 @@ def export_graph(G: nx.DiGraph, output_path: Optional[str] = None) -> str:
     _print_summary(G)
 
     return str(out)
+
+
+# Python stdlib modules — not security relevant, clutter the graph
+STDLIB = {
+    're', 'os', 'sys', 'json', 'datetime', 'time', 'math', 'random',
+    'typing', 'pathlib', 'logging', 'abc', 'enum', 'dataclasses',
+    'collections', 'functools', 'itertools', 'hashlib', 'base64',
+    'socket', 'urllib', 'http', 'ssl', 'threading', 'asyncio',
+    'subprocess', 'io', 'tempfile', 'shutil', 'copy', 'string',
+    'textwrap', 'contextlib', 'warnings', 'traceback', 'inspect',
+    'importlib', 'unittest', 'argparse', 'struct', 'array', 'queue',
+    'weakref', 'gc', 'platform', 'signal', 'errno', 'stat', 'glob',
+    'fnmatch', 'fileinput', 'configparser', 'csv', 'html', 'xml',
+    'email', 'mimetypes', 'uuid', 'hmac', 'secrets', 'decimal',
+    'fractions', 'statistics', 'pprint', 'reprlib', 'operator',
+    'builtins', '__future__', 'types', 'numbers', 'cmath',
+}
+
+
+def _filter_graph(G: nx.DiGraph) -> nx.DiGraph:
+    """
+    Remove stdlib library nodes and their edges.
+    Also tag remaining library nodes as stdlib=True/False.
+    Returns a cleaned copy of the graph.
+    """
+    import copy
+    G2 = copy.deepcopy(G)
+
+    # Remove stdlib lib nodes
+    to_remove = [
+        n for n in G2.nodes()
+        if n.startswith("lib:") and n.replace("lib:", "") in STDLIB
+    ]
+    G2.remove_nodes_from(to_remove)
+
+    # Remove test files from main view (tag them, don't delete)
+    for n in G2.nodes():
+        if n.startswith("file:") and ("test" in n.lower() or "__init__" in n):
+            G2.nodes[n]["is_test"] = True
+
+    print(f"[export] Filtered {len(to_remove)} stdlib libraries from graph")
+    return G2
 
 
 def _enrich_nodes(G: nx.DiGraph):

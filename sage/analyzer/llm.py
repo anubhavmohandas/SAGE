@@ -290,10 +290,12 @@ def _call_llm(prompt: str, cve_id: str) -> Optional[dict]:
     """
     if cfg.GEMINI_API_KEY:
         return _call_gemini(prompt, cve_id)
-    elif cfg.ANTHROPIC_API_KEY and cfg.ANTHROPIC_API_KEY != "placeholder":
+    elif cfg.ANTHROPIC_API_KEY and cfg.ANTHROPIC_API_KEY not in ("", "placeholder"):
         return _call_claude(prompt, cve_id)
     else:
-        print("[analyzer] No LLM API key configured. Set GEMINI_API_KEY or ANTHROPIC_API_KEY.")
+        print(f"[analyzer] No LLM key available for {cve_id} — skipping")
+        print(f"[analyzer] GEMINI_API_KEY set: {bool(cfg.GEMINI_API_KEY)}")
+        print(f"[analyzer] ANTHROPIC_API_KEY set: {bool(cfg.ANTHROPIC_API_KEY)}")
         return None
 
 
@@ -321,9 +323,12 @@ def _call_gemini(prompt: str, cve_id: str) -> Optional[dict]:
         return None
     except json.JSONDecodeError as e:
         print(f"[analyzer] JSON parse error for {cve_id}: {e}")
+        print(f"[analyzer] Raw was: {raw[:300]}")
         return None
     except Exception as e:
+        import traceback
         print(f"[analyzer] Gemini error for {cve_id}: {e}")
+        traceback.print_exc()
         return None
 
 

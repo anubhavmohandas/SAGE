@@ -231,41 +231,40 @@ let zoomTimeout;
 // tween
 let tween = null; // { from:{}, to:{}, t, duration }
 
-// Type hierarchy — what's visible at each level
-// Level 0 (root/file center): show only files + libraries
-// Level 1 (file center):      show functions + libraries + CVEs
-// Level 2 (function center):  show libraries + CVEs
+// Type visibility rules per center node type
 const VISIBLE_TYPES = {
-  file:     ['file', 'library'],
+  file:     ['file', 'library', 'cve'],
   library:  ['function', 'file', 'cve'],
-  function: ['library', 'cve', 'function'],
-  cve:      ['library'],
-  unknown:  ['file', 'library', 'function', 'cve'],
+  function: ['library', 'cve'],
+  cve:      ['library', 'file'],
+  unknown:  ['file', 'library', 'cve'],
 };
 
+// Max neighbours to show per level
+const MAX_NEIGHBOURS = 10;
+
 function getConnectedIds(nodeId) {
-  const centerType = GRAPH.nodes[nodeId] ? GRAPH.nodes[nodeId].type : 'unknown';
+  const node       = GRAPH.nodes[nodeId];
+  const centerType = node ? node.type : 'unknown';
   const allowed    = VISIBLE_TYPES[centerType] || VISIBLE_TYPES['unknown'];
 
   const ids = new Set([nodeId]);
-  GRAPH.edges.forEach(([a,b]) => {
-    if (a === nodeId && allowed.includes(GRAPH.nodes[b]?.type)) ids.add(b);
-    if (b === nodeId && allowed.includes(GRAPH.nodes[a]?.type)) ids.add(a);
+  GRAPH.edges.forEach(([a, b]) => {
+    const otherA = GRAPH.nodes[a], otherB = GRAPH.nodes[b];
+    if (a === nodeId && otherB && allowed.includes(otherB.type)) ids.add(b);
+    if (b === nodeId && otherA && allowed.includes(otherA.type)) ids.add(a);
   });
 
-  // Cap at 12 neighbours max — beyond that it's unreadable
+  // Cap and prioritise: CVEs first, then libraries, then files, then functions
   const neighbours = [...ids].filter(id => id !== nodeId);
-  if (neighbours.length > 12) {
-    // Prioritise CVEs first, then libraries, then files, then functions
-    const priority = (id) => {
+  if (neighbours.length > MAX_NEIGHBOURS) {
+    const priority = id => {
       const t = GRAPH.nodes[id]?.type;
       return t==='cve' ? 0 : t==='library' ? 1 : t==='file' ? 2 : 3;
     };
-    neighbours.sort((a,b) => priority(a) - priority(b));
-    const capped = new Set([nodeId, ...neighbours.slice(0, 12)]);
-    return [...capped];
+    neighbours.sort((a, b) => priority(a) - priority(b));
+    return [nodeId, ...neighbours.slice(0, MAX_NEIGHBOURS)];
   }
-
   return [...ids];
 }
 
@@ -765,14 +764,23 @@ function loadGraphData(data) {
     adjReverse[b].push(a);
   });
 
-  // Find best root — most connected file node
-  const fileNodes = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'file');
-  if (fileNodes.length > 0) {
-    // Pick file with most connections
-    fileNodes.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
-    centerNodeId = fileNodes[0];
+  // Pick best root: most connected non-test source file
+  const sourceFiles = Object.keys(GRAPH.nodes).filter(id => {
+    const n = GRAPH.nodes[id];
+    return n.type === 'file' && !n.is_test &&
+           !id.includes('test') && !id.includes('__init__');
+  });
+  const allFiles = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'file');
+  const candidates = sourceFiles.length > 0 ? sourceFiles : allFiles;
+
+  if (candidates.length > 0) {
+    candidates.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
+    centerNodeId = candidates[0];
   } else {
-    centerNodeId = Object.keys(GRAPH.nodes)[0];
+    // Fall back to most connected library if no files
+    const libs = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'library');
+    libs.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
+    centerNodeId = libs[0] || Object.keys(GRAPH.nodes)[0];
   }
   history = [];
   attackPath = null;
