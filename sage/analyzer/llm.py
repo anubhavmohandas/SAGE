@@ -46,14 +46,25 @@ import anthropic
 from sage.config import cfg
 
 
-# Anthropic client — initialized once, reused
-_client = None
-
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
-    return _client
+def _call_claude(prompt: str, cve_id: str) -> Optional[dict]:
+    """Anthropic fallback — used when no Gemini key."""
+    try:
+        client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            temperature=0.2,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = _strip_fences(raw)
+        result = json.loads(raw)
+        print(f"[analyzer] {cve_id} (Claude) → vulnerable={result.get('vulnerable')} "
+              f"confidence={result.get('confidence', 0):.2f}")
+        return result
+    except Exception as e:
+        print(f"[analyzer] Claude error for {cve_id}: {e}")
+        return None
 
 
 # ─── Main analysis function ───────────────────────────────────────────────────
@@ -150,8 +161,8 @@ def analyze_single_cve(
         semgrep_findings=findings,
     )
 
-    # Call Claude
-    response = _call_claude(prompt, cve_id)
+    # Call LLM (Gemini if key set, else Anthropic)
+    response = _call_llm(prompt, cve_id)
     if not response:
         return None
 
@@ -265,54 +276,64 @@ OUTPUT: Respond with ONLY valid JSON. No text before or after. No markdown fence
 }}"""
 
 
-# ─── Claude API call ──────────────────────────────────────────────────────────
+# ─── LLM dispatch — Gemini primary, Anthropic fallback ───────────────────────
 
-def _call_claude(prompt: str, cve_id: str) -> Optional[dict]:
+def _call_llm(prompt: str, cve_id: str) -> Optional[dict]:
     """
-    Send prompt to Claude and parse the JSON response.
-
-    Uses claude-sonnet — fast, accurate for code analysis.
-    Temperature 0.2 — low randomness for consistent security judgments.
+    Route to Gemini (free) if key available, else fall back to Anthropic.
 
     Teaching note:
-        We use a low temperature (0.2) for security analysis.
-        High temperature = more creative = more hallucination risk.
-        For binary decisions (vulnerable: true/false), we want
-        deterministic, consistent answers.
+        This is the provider-agnostic pattern.
+        The rest of the pipeline doesn't care which LLM ran —
+        it just gets back a dict with the same schema.
+        Swap providers by changing .env, not code.
+    """
+    if cfg.GEMINI_API_KEY:
+        return _call_gemini(prompt, cve_id)
+    elif cfg.ANTHROPIC_API_KEY and cfg.ANTHROPIC_API_KEY != "placeholder":
+        return _call_claude(prompt, cve_id)
+    else:
+        print("[analyzer] No LLM API key configured. Set GEMINI_API_KEY or ANTHROPIC_API_KEY.")
+        return None
+
+
+def _call_gemini(prompt: str, cve_id: str) -> Optional[dict]:
+    """
+    Call Gemini 1.5 Flash — free tier, 15 RPM limit.
+    Temperature 0.2 for consistent security judgments.
     """
     try:
-        client = _get_client()
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            temperature=0.2,
-            messages=[{"role": "user", "content": prompt}],
+        import google.generativeai as genai
+        genai.configure(api_key=cfg.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            generation_config={"temperature": 0.2, "max_output_tokens": 1024},
         )
-
-        raw = response.content[0].text.strip()
-
-        # Strip markdown fences if Claude adds them despite instructions
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        raw = _strip_fences(raw)
         result = json.loads(raw)
-        print(f"[analyzer] {cve_id} → vulnerable={result.get('vulnerable')} "
+        print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
               f"confidence={result.get('confidence', 0):.2f}")
         return result
-
+    except ImportError:
+        print("[analyzer] google-generativeai not installed. Run: pip3 install google-generativeai")
+        return None
     except json.JSONDecodeError as e:
         print(f"[analyzer] JSON parse error for {cve_id}: {e}")
-        print(f"[analyzer] Raw response: {raw[:200]}")
-        return None
-    except anthropic.AuthenticationError:
-        print("[analyzer] Invalid Anthropic API key. Check .env")
         return None
     except Exception as e:
-        print(f"[analyzer] Error analyzing {cve_id}: {e}")
+        print(f"[analyzer] Gemini error for {cve_id}: {e}")
         return None
+
+
+def _strip_fences(raw: str) -> str:
+    """Strip markdown code fences from LLM output."""
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return raw.strip()
 
 
 # ─── Code extraction ──────────────────────────────────────────────────────────
