@@ -286,55 +286,73 @@ OUTPUT: Respond with ONLY valid JSON. No text before or after. No markdown fence
 def _call_llm(prompt: str, cve_id: str) -> Optional[dict]:
     """
     Route to Gemini (free) if key available, else fall back to Anthropic.
-
-    Teaching note:
-        This is the provider-agnostic pattern.
-        The rest of the pipeline doesn't care which LLM ran —
-        it just gets back a dict with the same schema.
-        Swap providers by changing .env, not code.
+    If Gemini returns quota-exhausted (429), falls back to Anthropic immediately.
     """
     if cfg.GEMINI_API_KEY:
-        return _call_gemini(prompt, cve_id)
-    elif cfg.ANTHROPIC_API_KEY and cfg.ANTHROPIC_API_KEY not in ("", "placeholder"):
+        result = _call_gemini(prompt, cve_id)
+        if result is not None:
+            return result
+        # Gemini failed (quota or error) — try Anthropic fallback
+        if cfg.ANTHROPIC_API_KEY:
+            print(f"[analyzer] Falling back to Claude for {cve_id}")
+            return _call_claude(prompt, cve_id)
+        return None
+    elif cfg.ANTHROPIC_API_KEY:
         return _call_claude(prompt, cve_id)
     else:
         print(f"[analyzer] No LLM key available for {cve_id} — skipping")
-        print(f"[analyzer] GEMINI_API_KEY set: {bool(cfg.GEMINI_API_KEY)}")
-        print(f"[analyzer] ANTHROPIC_API_KEY set: {bool(cfg.ANTHROPIC_API_KEY)}")
         return None
 
 
 def _call_gemini(prompt: str, cve_id: str) -> Optional[dict]:
     """
-    Call Gemini 1.5 Flash — free tier, 15 RPM limit.
-    Temperature 0.2 for consistent security judgments.
+    Call Gemini 2.0 Flash — free tier, 15 RPM limit.
+    Exponential backoff on 429. Returns None on quota exhaustion so
+    caller can fall back to Anthropic.
     """
+    import time
+
     try:
         import google.generativeai as genai
-        genai.configure(api_key=cfg.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            generation_config={"temperature": 0.2, "max_output_tokens": 1024},
-        )
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
-        raw = _strip_fences(raw)
-        result = json.loads(raw)
-        print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
-              f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
-        return result
     except ImportError:
-        print("[analyzer] google-generativeai not installed. Run: pip3 install google-generativeai")
+        print("[analyzer] google-generativeai not installed. Run: pip install google-generativeai")
         return None
-    except json.JSONDecodeError as e:
-        print(f"[analyzer] JSON parse error for {cve_id}: {e}")
-        print(f"[analyzer] Raw was: {raw[:300]}")
-        return None
-    except Exception as e:
-        import traceback
-        print(f"[analyzer] Gemini error for {cve_id}: {e}")
-        traceback.print_exc()
-        return None
+
+    genai.configure(api_key=cfg.GEMINI_API_KEY)
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        generation_config={"temperature": 0.2, "max_output_tokens": 1024},
+    )
+
+    raw = ""
+    for attempt in range(4):  # max 4 attempts: 0, 1, 2, 3
+        try:
+            response = model.generate_content(prompt)
+            raw = response.text.strip()
+            raw = _strip_fences(raw)
+            result = json.loads(raw)
+            print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
+                  f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
+            time.sleep(4)  # throttle after successful call: 15 RPM = 1 req/4s
+            return result
+        except json.JSONDecodeError as e:
+            print(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
+            return None
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                if attempt < 3:
+                    wait = 5 * (2 ** attempt)  # 5s, 10s, 20s
+                    print(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s (attempt {attempt+1}/3)")
+                    time.sleep(wait)
+                else:
+                    print(f"[analyzer] Gemini quota exhausted for {cve_id} — falling back")
+                    return None
+            else:
+                print(f"[analyzer] Gemini error for {cve_id}: {e}")
+                return None
+
+    return None
 
 
 def _strip_fences(raw: str) -> str:
