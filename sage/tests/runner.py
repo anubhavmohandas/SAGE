@@ -103,20 +103,27 @@ def _run_existing_tests(repo_path: str) -> dict:
     print(f"[tests] Found test locations: {[str(t) for t in test_locations[:3]]}")
     print(f"[tests] Running existing tests...")
 
+    # Use repo's own venv python if available, else fall back to sys.executable
+    python = _find_repo_python(repo_path)
+    print(f"[tests] Using python: {python}")
+
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(repo_path), "-v", "--tb=short", "-q"],
+            [python, "-m", "pytest", str(repo_path), "-v", "--tb=short", "-q"],
             capture_output=True,
             text=True,
             timeout=120,
             cwd=repo_path,
         )
-        passed = result.returncode == 0
         output = result.stdout + result.stderr
 
-        # Parse test count from pytest output
-        count = _parse_pytest_count(output)
+        # If pytest itself isn't installed, fall back to unittest
+        if "No module named pytest" in output:
+            print("[tests] pytest not installed — trying unittest")
+            return _run_unittest(repo_path)
 
+        passed = result.returncode == 0
+        count = _parse_pytest_count(output)
         status = "PASSED" if passed else "FAILED"
         print(f"[tests] Existing tests: {status} ({count} tests)")
         if not passed:
@@ -130,12 +137,34 @@ def _run_existing_tests(repo_path: str) -> dict:
     except subprocess.TimeoutExpired:
         print("[tests] Existing tests timed out (120s)")
         return {"passed": False, "output": "Timeout after 120s", "count": 0}
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print("[tests] pytest not found — trying unittest")
+        return _run_unittest(repo_path)
+    except subprocess.CalledProcessError:
         print("[tests] pytest not found — trying unittest")
         return _run_unittest(repo_path)
     except Exception as e:
         print(f"[tests] Error running tests: {e}")
         return {"passed": False, "output": str(e), "count": 0}
+
+
+def _find_repo_python(repo_path: str) -> str:
+    """
+    Find the best Python interpreter for running the repo's tests.
+    Prefers the repo's own venv, falls back to sys.executable.
+    """
+    repo = Path(repo_path)
+    candidates = [
+        repo / "venv" / "bin" / "python3",
+        repo / "venv" / "bin" / "python",
+        repo / ".venv" / "bin" / "python3",
+        repo / ".venv" / "bin" / "python",
+        repo / "env" / "bin" / "python3",
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return sys.executable
 
 
 def _run_unittest(repo_path: str) -> dict:
