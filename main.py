@@ -178,6 +178,7 @@ def run_synapse(repo_path: str):
                     "cve_id":         cve_id,
                     "package":        data.get("package", ""),
                     "affected_range": data.get("affected_range", ""),
+                    "severity":       data.get("severity", "UNKNOWN"),
                 })
 
     patch_result = run_patcher(confirmed, repo_path, all_cves=all_cves)

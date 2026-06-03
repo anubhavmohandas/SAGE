@@ -335,13 +335,17 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
             continue
 
         # Parse package name from line (handle pkg==x, pkg>=x, pkg, pkg[extra])
-        pkg_name = stripped.split("=")[0].split(">")[0].split("<")[0].split("[")[0].strip().lower().replace("_", "-")
+        import re as _re
+        m = _re.match(r'^([A-Za-z0-9_\-]+)(\[[^\]]+\])?', stripped)
+        pkg_name = m.group(1).strip().lower().replace("_", "-") if m else ""
+        extras   = m.group(2) or "" if m else ""  # e.g. [speedups]
         if pkg_name in bumps:
             safe_ver, cve_ids = bumps[pkg_name]
             # Deduplicate CVE list
             unique_cves = sorted(set(cve_ids))
-            base_name = stripped.split("=")[0].split(">")[0].split("<")[0].split("[")[0].strip()
-            new_line = f"{base_name}>={safe_ver}  # SAGE: {', '.join(unique_cves)}"
+            # Preserve extras (e.g. aiohttp[speedups]>=3.13.3)
+            base_name = m.group(1).strip() if m else pkg_name
+            new_line = f"{base_name}{extras}>={safe_ver}  # SAGE: {', '.join(unique_cves)}"
             new_lines.append(new_line)
             if pkg_name not in already_changed:
                 changed.append((pkg_name, safe_ver, unique_cves))
