@@ -1,18 +1,14 @@
 """
-analyzer/llm.py — Manual LLM vulnerability confirmation
+analyzer/llm.py — LLM vulnerability confirmation (API + manual modes)
 
-Instead of calling an API, this module:
-  1. Exports a human-readable prompt file per CVE → data/prompts/CVE-XXXX.txt
-  2. Reads your manual response (JSON) from → data/responses/CVE-XXXX.json
-  3. Skips CVEs with no response file (treated as unconfirmed)
+At runtime, asks whether you have an API key available:
+  [y] API mode   — Gemini 2.0 Flash primary, Anthropic Haiku fallback,
+                   exponential backoff on 429.
+  [n] Manual mode — exports prompt files to data/prompts/CVE-XXXX.txt.
+                    You paste into Claude chat, save the JSON response to
+                    data/responses/CVE-XXXX.json, re-run to continue.
 
-Workflow:
-  1. Run pipeline → prompts generated in data/prompts/
-  2. Open each prompt, paste into Claude chat
-  3. Copy Claude's JSON response into data/responses/CVE-XXXX.json
-  4. Re-run pipeline → reads responses, continues to patcher
-
-Response schema (paste this into Claude chat along with the prompt):
+Manual response schema:
 {
   "vulnerable": true or false,
   "confidence": 0.0 to 1.0,
@@ -34,12 +30,52 @@ RESPONSES_DIR = Path("data/responses")
 
 # ─── Main analysis function ───────────────────────────────────────────────────
 
+def _ask_mode() -> str:
+    """Ask user whether to use API or manual prompt mode. Returns 'api' or 'manual'."""
+    print("\n[analyzer] ── Analysis Mode ──")
+    print("  Do you have a Gemini or Anthropic API key available for analysis?")
+    print("  [y] Yes — use API  |  [n] No — export prompts for manual review")
+    while True:
+        choice = input("  Your choice (y/n): ").strip().lower()
+        if choice in ("y", "yes"):
+            return "api"
+        if choice in ("n", "no"):
+            return "manual"
+        print("  Please enter y or n.")
+
+
 def analyze_findings(findings: list[dict], G, repo_path: str) -> list[dict]:
     """
-    Export prompt files for each CVE, then read any existing manual responses.
+    Ask user whether to use API or manual prompt mode, then run accordingly.
 
-    First call: generates prompts, returns [] (no responses yet).
-    Subsequent calls: reads responses you've dropped in, returns confirmed list.
+    API mode:   calls Gemini 2.0 Flash (with Anthropic fallback) per CVE.
+    Manual mode: exports prompt files → you paste into Claude chat → drop JSON responses.
+    """
+    mode = _ask_mode()
+    if mode == "api":
+        return _analyze_api(findings, G, repo_path)
+    return _analyze_manual(findings, G, repo_path)
+
+
+def _analyze_api(findings: list[dict], G, repo_path: str) -> list[dict]:
+    """API mode — Gemini primary, Anthropic fallback, exponential backoff on 429."""
+    by_cve = _group_by_cve(findings, G)
+    print(f"[analyzer] Analyzing {len(by_cve)} CVEs via API...")
+    confirmed = []
+    for cve_id, cve_findings in by_cve.items():
+        result = _analyze_single_cve_api(cve_id, cve_findings, G, repo_path)
+        if result:
+            confirmed.append(result)
+    print(f"[analyzer] Confirmed: {len(confirmed)}/{len(by_cve)} CVEs actually exploitable")
+    return confirmed
+
+
+def _analyze_manual(findings: list[dict], G, repo_path: str) -> list[dict]:
+    """
+    Manual mode — export prompts, read existing responses.
+
+    First run: generates prompts, returns [].
+    Subsequent runs: reads responses you've saved, returns confirmed list.
     """
     PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
     RESPONSES_DIR.mkdir(parents=True, exist_ok=True)
@@ -99,6 +135,160 @@ def analyze_findings(findings: list[dict], G, repo_path: str) -> list[dict]:
         print(f"  4. Re-run: python3 main.py --synapse <repo>")
 
     return confirmed
+
+
+# ─── Shared helpers ──────────────────────────────────────────────────────────
+
+def _group_by_cve(findings: list[dict], G) -> dict:
+    """Group Semgrep findings by CVE ID, and include CVEs with no findings."""
+    by_cve = {}
+    for f in findings:
+        by_cve.setdefault(f["cve_id"], []).append(f)
+    for cve_node in G.nodes():
+        if cve_node.startswith("cve:"):
+            cve_id = cve_node.replace("cve:", "")
+            by_cve.setdefault(cve_id, [])
+    return by_cve
+
+
+# ─── API mode internals ───────────────────────────────────────────────────────
+
+def _analyze_single_cve_api(cve_id: str, findings: list[dict], G, repo_path: str) -> Optional[dict]:
+    from sage.synapse.mapper import get_blast_radius
+    from sage.config import cfg
+
+    cve_node = f"cve:{cve_id}"
+    if not G.has_node(cve_node):
+        return None
+
+    node_data  = G.nodes[cve_node]
+    severity   = node_data.get("severity", "UNKNOWN")
+    package    = node_data.get("package", "")
+    cwe        = node_data.get("cwe", "")
+    affected_r = node_data.get("affected_range", "")
+
+    blast = get_blast_radius(G, cve_node)
+    if not blast:
+        return None
+
+    function_codes = _extract_function_codes(blast.get("exposed_functions", []), repo_path, G)
+    if not function_codes:
+        function_codes = _extract_file_snippets(blast.get("exposed_files", []), repo_path, package)
+    if not function_codes and not findings:
+        print(f"[analyzer] {cve_id} — no code to analyze, skipping")
+        return None
+
+    prompt = _build_prompt(cve_id, severity, package, cwe, affected_r, function_codes, findings)
+
+    response = _call_llm_api(prompt, cve_id, cfg)
+    if not response:
+        return None
+
+    if response.get("vulnerable", False):
+        return {
+            "cve_id":             cve_id,
+            "severity":           severity,
+            "package":            package,
+            "cwe":                cwe,
+            "affected_range":     affected_r,
+            "vulnerable":         True,
+            "confidence":         response.get("confidence", 0.0),
+            "reason":             response.get("reason", ""),
+            "affected_functions": response.get("affected_functions", []),
+            "attack_vector":      response.get("attack_vector", ""),
+            "recommendation":     response.get("recommendation", ""),
+            "semgrep_findings":   findings,
+        }
+
+    print(f"[analyzer] {cve_id} → NOT exploitable "
+          f"({response.get('confidence', 0):.1f}): {response.get('reason', '')[:80]}")
+    return None
+
+
+def _call_llm_api(prompt: str, cve_id: str, cfg) -> Optional[dict]:
+    """Gemini primary, Anthropic fallback."""
+    if cfg.GEMINI_API_KEY:
+        result = _call_gemini(prompt, cve_id, cfg)
+        if result is not None:
+            return result
+        if cfg.ANTHROPIC_API_KEY:
+            print(f"[analyzer] Falling back to Claude for {cve_id}")
+            return _call_claude(prompt, cve_id, cfg)
+        return None
+    elif cfg.ANTHROPIC_API_KEY:
+        return _call_claude(prompt, cve_id, cfg)
+    print(f"[analyzer] No API key available for {cve_id}")
+    return None
+
+
+def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
+    import time
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        print("[analyzer] google-generativeai not installed.")
+        return None
+
+    genai.configure(api_key=cfg.GEMINI_API_KEY)
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        generation_config={"temperature": 0.2, "max_output_tokens": 1024},
+    )
+    raw = ""
+    for attempt in range(4):
+        try:
+            response = model.generate_content(prompt)
+            raw = _strip_fences(response.text.strip())
+            result = json.loads(raw)
+            print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
+                  f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
+            time.sleep(4)
+            return result
+        except json.JSONDecodeError as e:
+            print(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
+            return None
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                if attempt < 3:
+                    wait = 5 * (2 ** attempt)
+                    print(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
+                    time.sleep(wait)
+                else:
+                    print(f"[analyzer] Gemini quota exhausted for {cve_id} — falling back")
+                    return None
+            else:
+                print(f"[analyzer] Gemini error for {cve_id}: {e}")
+                return None
+    return None
+
+
+def _call_claude(prompt: str, cve_id: str, cfg) -> Optional[dict]:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            temperature=0.2,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = _strip_fences(response.content[0].text.strip())
+        result = json.loads(raw)
+        print(f"[analyzer] {cve_id} (Claude) → vulnerable={result.get('vulnerable')} "
+              f"confidence={result.get('confidence', 0):.2f}")
+        return result
+    except Exception as e:
+        print(f"[analyzer] Claude error for {cve_id}: {e}")
+        return None
+
+
+def _strip_fences(raw: str) -> str:
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return raw.strip()
 
 
 # ─── Prompt export ────────────────────────────────────────────────────────────
