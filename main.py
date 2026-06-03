@@ -30,6 +30,7 @@ from sage.analyzer.llm import analyze_findings, save_confirmed, print_analysis_s
 from sage.patcher.llm  import run_patcher, print_patch_summary
 from sage.tests.runner    import run_tests, print_test_summary, save_test_results
 from sage.verifier.semgrep import run_verifier, print_verifier_summary, save_verifier_results
+from sage.github.pr        import run_github_pr, print_pr_summary, save_pr_result
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -199,6 +200,22 @@ def run_synapse(repo_path: str):
     verify_results = run_verifier(patch_result, confirmed, repo_path)
     save_verifier_results(verify_results)
     print_verifier_summary(verify_results)
+
+    # Step 9 — GitHub PR
+    print(f"\n{'='*60}")
+    print(f"  GITHUB — Pull Request")
+    print(f"{'='*60}\n")
+    print("[SAGE] GitHub Step 1/1 — Creating PR...")
+    pr_result = run_github_pr(
+        patch_result=patch_result,
+        confirmed=confirmed,
+        all_cves=all_cves,
+        test_results=test_results,
+        verify_results=verify_results,
+        repo_path=repo_path,
+    )
+    save_pr_result(pr_result)
+    print_pr_summary(pr_result)
 
 
 def run_single_cve(cve_id: str):

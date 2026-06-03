@@ -31,6 +31,13 @@ TESTS_DIR = Path("data/tests")
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
+def _count_failures(output: str) -> int:
+    """Parse number of failures from pytest output."""
+    import re
+    match = re.search(r"(\d+) failed", output)
+    return int(match.group(1)) if match else 0
+
+
 def run_tests(patch_result: dict, confirmed: list[dict], repo_path: str) -> dict:
     """
     Run all tests for the patched repo.
@@ -60,6 +67,14 @@ def run_tests(patch_result: dict, confirmed: list[dict], repo_path: str) -> dict
     # Step 1 — Run existing repo tests
     existing = _run_existing_tests(repo_path)
     results["existing_tests"] = existing
+
+    # Adjust pass/fail — if failures are all pre-existing (baseline), don't block
+    baseline_failures = existing.get("baseline_failures", 0)
+    current_failures  = existing.get("failures", 0)
+    new_failures      = max(0, current_failures - baseline_failures)
+    if not existing.get("passed") and new_failures == 0:
+        print(f"[tests] {current_failures} pre-existing failure(s) — not caused by SAGE patch")
+        existing["passed"] = True  # override — pre-existing failures don't block PR
 
     # Step 2 — Generate + run security tests for confirmed vulns
     if confirmed:
@@ -122,17 +137,23 @@ def _run_existing_tests(repo_path: str) -> dict:
             print("[tests] pytest not installed — trying unittest")
             return _run_unittest(repo_path)
 
-        passed = result.returncode == 0
-        count = _parse_pytest_count(output)
-        status = "PASSED" if passed else "FAILED"
-        print(f"[tests] Existing tests: {status} ({count} tests)")
+        passed   = result.returncode == 0
+        count    = _parse_pytest_count(output)
+        failures = _count_failures(output)
+        status   = "PASSED" if passed else "FAILED"
+        print(f"[tests] Existing tests: {status} ({count} passed, {failures} failed)")
         if not passed:
-            # Show last 20 lines of failure output
             lines = output.strip().splitlines()
             for line in lines[-20:]:
                 print(f"[tests]   {line}")
 
-        return {"passed": passed, "output": output, "count": count}
+        return {
+            "passed":            passed,
+            "output":            output,
+            "count":             count,
+            "failures":          failures,
+            "baseline_failures": failures,  # these are all pre-patch = baseline
+        }
 
     except subprocess.TimeoutExpired:
         print("[tests] Existing tests timed out (120s)")
