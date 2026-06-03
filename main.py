@@ -28,7 +28,8 @@ from sage.synapse.export import export_graph
 from sage.scanner.semgrep import scan_blast_radius, save_findings, print_findings_summary
 from sage.analyzer.llm import analyze_findings, save_confirmed, print_analysis_summary
 from sage.patcher.llm  import run_patcher, print_patch_summary
-from sage.tests.runner import run_tests, print_test_summary, save_test_results
+from sage.tests.runner    import run_tests, print_test_summary, save_test_results
+from sage.verifier.semgrep import run_verifier, print_verifier_summary, save_verifier_results
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -189,6 +190,15 @@ def run_synapse(repo_path: str):
     test_results = run_tests(patch_result, confirmed, repo_path)
     save_test_results(test_results)
     print_test_summary(test_results)
+
+    # Step 8 — Verifier
+    print(f"\n{'='*60}")
+    print(f"  VERIFIER — Final Semgrep Check")
+    print(f"{'='*60}\n")
+    print("[SAGE] Verifier Step 1/1 — Running final Semgrep pass...")
+    verify_results = run_verifier(patch_result, confirmed, repo_path)
+    save_verifier_results(verify_results)
+    print_verifier_summary(verify_results)
 
 
 def run_single_cve(cve_id: str):

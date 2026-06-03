@@ -101,15 +101,15 @@ def _run_existing_tests(repo_path: str) -> dict:
         }
 
     print(f"[tests] Found test locations: {[str(t) for t in test_locations[:3]]}")
-    print(f"[tests] Running existing tests...")
 
-    # Use repo's own venv python if available, else fall back to sys.executable
-    python = _find_repo_python(repo_path)
-    print(f"[tests] Using python: {python}")
+    # Install repo's deps if requirements.txt exists
+    _install_repo_deps(repo_path)
+
+    print(f"[tests] Running existing tests...")
 
     try:
         result = subprocess.run(
-            [python, "-m", "pytest", str(repo_path), "-v", "--tb=short", "-q"],
+            [sys.executable, "-m", "pytest", str(repo_path), "-v", "--tb=short", "-q"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -148,23 +148,28 @@ def _run_existing_tests(repo_path: str) -> dict:
         return {"passed": False, "output": str(e), "count": 0}
 
 
-def _find_repo_python(repo_path: str) -> str:
+def _install_repo_deps(repo_path: str):
     """
-    Find the best Python interpreter for running the repo's tests.
-    Prefers the repo's own venv, falls back to sys.executable.
+    Install repo's requirements into the current venv so tests can import them.
+    Skips if requirements.txt not found.
     """
-    repo = Path(repo_path)
-    candidates = [
-        repo / "venv" / "bin" / "python3",
-        repo / "venv" / "bin" / "python",
-        repo / ".venv" / "bin" / "python3",
-        repo / ".venv" / "bin" / "python",
-        repo / "env" / "bin" / "python3",
-    ]
-    for c in candidates:
-        if c.exists():
-            return str(c)
-    return sys.executable
+    req = Path(repo_path) / "requirements.txt"
+    if not req.exists():
+        return
+    print(f"[tests] Installing repo deps from {req}...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", str(req), "-q"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            print(f"[tests] Deps installed OK")
+        else:
+            print(f"[tests] Dep install warning: {result.stderr[:200]}")
+    except Exception as e:
+        print(f"[tests] Could not install deps: {e}")
 
 
 def _run_unittest(repo_path: str) -> dict:
