@@ -27,6 +27,7 @@ from sage.synapse.mapper import attach_cves, get_blast_radius
 from sage.synapse.export import export_graph
 from sage.scanner.semgrep import scan_blast_radius, save_findings, print_findings_summary
 from sage.analyzer.llm import analyze_findings, save_confirmed, print_analysis_summary
+from sage.patcher.llm  import run_patcher, print_patch_summary
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -154,6 +155,25 @@ def run_synapse(repo_path: str):
     confirmed = analyze_findings(findings, G, repo_path)
     save_confirmed(confirmed)
     print_analysis_summary(confirmed)
+
+    # Step 6 — Patcher
+    print(f"\n{'='*60}")
+    print(f"  PATCHER — Automated Fix Generation")
+    print(f"{'='*60}\n")
+    print("[SAGE] Patcher Step 1/1 — Generating patches...")
+
+    # Pass all CVE nodes from graph for dep bump (not just confirmed)
+    all_cves = []
+    for node, data in G.nodes(data=True):
+        if node.startswith("cve:"):
+            all_cves.append({
+                "cve_id":         data.get("cve_id", node.replace("cve:", "")),
+                "package":        data.get("package", ""),
+                "affected_range": data.get("affected_range", ""),
+            })
+
+    patch_result = run_patcher(confirmed, repo_path, all_cves=all_cves)
+    print_patch_summary(patch_result)
 
 
 def run_single_cve(cve_id: str):
