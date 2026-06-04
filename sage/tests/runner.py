@@ -26,7 +26,14 @@ from typing import Optional
 from sage.config import cfg
 
 
-TESTS_DIR = Path("data/tests")
+def _tests_dir() -> Path:
+    try:
+        from sage.config import cfg
+        return cfg.data_dir("tests")
+    except Exception:
+        return Path("data/tests")
+
+TESTS_DIR = Path("data/tests")  # legacy fallback
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
@@ -54,7 +61,7 @@ def run_tests(patch_result: dict, confirmed: list[dict], repo_path: str) -> dict
           "all_passed":     bool,
         }
     """
-    TESTS_DIR.mkdir(parents=True, exist_ok=True)
+    _tests_dir().mkdir(parents=True, exist_ok=True)
 
     print(f"[tests] Running test suite for {repo_path}")
 
@@ -240,7 +247,7 @@ def _generate_and_run_security_tests(
 
     for vuln in confirmed:
         cve_id   = vuln["cve_id"]
-        test_file = TESTS_DIR / f"test_{cve_id.replace('-', '_')}.py"
+        test_file = _tests_dir() / f"test_{cve_id.replace('-', '_')}.py"
 
         # Get the patched code for context
         patch_dir = Path("data/patches") / cve_id
@@ -265,7 +272,7 @@ def _generate_and_run_security_tests(
     print(f"[tests] Running {len(generated_files)} security test(s)...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(TESTS_DIR), "-v", "--tb=short"],
+            [sys.executable, "-m", "pytest", str(_tests_dir()), "-v", "--tb=short"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -365,9 +372,9 @@ def print_test_summary(results: dict):
     print(f"  Next: verifier → github PR")
 
 
-def save_test_results(results: dict, output_path: str = "data/test_results.json"):
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    # Don't save full output to JSON — too large. Save summary only.
+def save_test_results(results: dict, output_path: str = ""):
+    p = Path(output_path) if output_path else cfg.data_dir() / "test_results.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
     summary = {
         "existing_tests": {
             "passed": results.get("existing_tests", {}).get("passed"),
@@ -379,6 +386,6 @@ def save_test_results(results: dict, output_path: str = "data/test_results.json"
         },
         "all_passed": results.get("all_passed", False),
     }
-    with open(output_path, "w") as f:
+    with open(p, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"[tests] Results saved → {output_path}")
+    print(f"[tests] Results saved → {p}")

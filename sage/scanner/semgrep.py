@@ -332,20 +332,16 @@ def _extract_cwe(info: str) -> Optional[str]:
     return match.group(0) if match else None
 
 
-def save_findings(findings: list[dict], output_path: str = "data/findings.json"):
+def save_findings(findings: list[dict], output_path: str = ""):
     """
     Save Semgrep findings to JSON for the next pipeline stage (LLM analyzer).
-
-    Teaching note:
-        Each pipeline stage writes its output to a JSON file.
-        The next stage reads from it.
-        This means stages are decoupled — you can re-run any stage
-        independently without running the whole pipeline.
     """
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+    from sage.config import cfg
+    p = Path(output_path) if output_path else cfg.data_dir() / "findings.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w") as f:
         json.dump(findings, f, indent=2)
-    print(f"[scanner] Findings saved → {output_path}")
+    print(f"[scanner] Findings saved → {p}")
 
 
 def print_findings_summary(findings: list[dict]):

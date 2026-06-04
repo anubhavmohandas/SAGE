@@ -481,8 +481,10 @@ def print_pr_summary(result: dict):
     print(f"\n  Pipeline complete ✓")
 
 
-def save_pr_result(result: dict, output_path: str = "data/pr_result.json"):
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+def save_pr_result(result: dict, output_path: str = ""):
+    from sage.config import cfg
+    p = Path(output_path) if output_path else cfg.data_dir() / "pr_result.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w") as f:
         json.dump(result, f, indent=2)
-    print(f"[github] Result saved → {output_path}")
+    print(f"[github] Result saved → {p}")

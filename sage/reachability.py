@@ -308,11 +308,13 @@ def print_reachability_summary(results: list[dict]):
             print(f"    ... and {len(r['paths']) - 3} more paths")
 
 
-def save_reachability(results: list[dict], output_path: str = "data/reachability.json"):
+def save_reachability(results: list[dict], output_path: str = ""):
     """Save reachability results to JSON."""
     import json
     from pathlib import Path
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+    from sage.config import cfg
+    p = Path(output_path) if output_path else cfg.data_dir() / "reachability.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"[reach] Reachability saved → {output_path}")
+    print(f"[reach] Reachability saved → {p}")

@@ -29,8 +29,22 @@ from typing import Optional
 from sage.scanner.semgrep import CWE_TO_RULES
 
 
-PATCHES_DIR = Path("data/patches")
-VERIFY_DIR  = Path("data/verify")
+def _patches_dir() -> Path:
+    try:
+        from sage.config import cfg
+        return cfg.data_dir("patches")
+    except Exception:
+        return Path("data/patches")
+
+def _verify_dir() -> Path:
+    try:
+        from sage.config import cfg
+        return cfg.data_dir("verify")
+    except Exception:
+        return Path("data/verify")
+
+PATCHES_DIR = Path("data/patches")  # legacy
+VERIFY_DIR  = Path("data/verify")   # legacy
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
@@ -52,7 +66,7 @@ def run_verifier(patch_result: dict, confirmed: list[dict], repo_path: str) -> d
           "new_issues":   [...],   # any NEW issues introduced by patch
         }
     """
-    VERIFY_DIR.mkdir(parents=True, exist_ok=True)
+    _verify_dir().mkdir(parents=True, exist_ok=True)
 
     results = {
         "passed":       True,
@@ -269,8 +283,10 @@ def print_verifier_summary(results: dict):
     print(f"  Next: github PR")
 
 
-def save_verifier_results(results: dict, output_path: str = "data/verify_results.json"):
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+def save_verifier_results(results: dict, output_path: str = ""):
+    from sage.config import cfg
+    p = Path(output_path) if output_path else cfg.data_dir() / "verify_results.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"[verifier] Results saved → {output_path}")
+    print(f"[verifier] Results saved → {p}")

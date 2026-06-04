@@ -45,7 +45,14 @@ TYPE_COLORS = {
     "cve":      "#ff4444",
 }
 
-OUTPUT_PATH = Path("data/synapse_graph.json")
+def _output_path() -> Path:
+    try:
+        from sage.config import cfg
+        return cfg.data_dir() / "synapse_graph.json"
+    except Exception:
+        return Path("data/synapse_graph.json")
+
+OUTPUT_PATH = Path("data/synapse_graph.json")  # legacy
 _CURRENT_REPO_NAME = ""  # set by export_graph from repo_path
 
 
@@ -71,7 +78,7 @@ def export_graph(
         lists here so the viz doesn't need to compute them.
     """
     global _CURRENT_REPO_NAME
-    out = Path(output_path) if output_path else OUTPUT_PATH
+    out = Path(output_path) if output_path else _output_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     if repo_path:
         _CURRENT_REPO_NAME = Path(repo_path).name

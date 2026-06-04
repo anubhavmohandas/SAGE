@@ -571,11 +571,13 @@ def _read_response(cve_id: str, findings: list[dict], G) -> Optional[dict]:
 
 # ─── Save results ─────────────────────────────────────────────────────────────
 
-def save_confirmed(confirmed: list[dict], output_path: str = "data/confirmed.json"):
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+def save_confirmed(confirmed: list[dict], output_path: str = ""):
+    from sage.config import cfg
+    p = Path(output_path) if output_path else cfg.data_dir() / "confirmed.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w") as f:
         json.dump(confirmed, f, indent=2)
-    print(f"[analyzer] Confirmed vulnerabilities saved → {output_path}")
+    print(f"[analyzer] Confirmed vulnerabilities saved → {p}")
 
 
 def print_analysis_summary(confirmed: list[dict]):
