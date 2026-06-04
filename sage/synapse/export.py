@@ -197,13 +197,14 @@ def _generate_index_html(graph_data: dict, output_dir: Path):
 """
     html = html.replace("</body>", inject + "</body>")
 
-    # Write to demos/<repo>_<date>/index.html
+    # Write to demos/<repo>_<date>/index.html — always at SAGE project root
     from datetime import datetime
     date_str  = datetime.now().strftime("%Y-%m-%d")
-    # output_dir is data/ — parent is SAGE root, not the scanned repo
-    # Pass repo_path separately via a module-level variable set by export_graph
     repo_name = _CURRENT_REPO_NAME or "repo"
-    demo_dir  = output_dir.parent / "demos" / f"{repo_name}_{date_str}"
+    # template is synapse.html at the SAGE root — use its parent as the demos anchor
+    # This is stable regardless of where data/ is scoped to
+    sage_root = template.parent
+    demo_dir  = sage_root / "demos" / f"{repo_name}_{date_str}"
     demo_dir.mkdir(parents=True, exist_ok=True)
 
     index_path = demo_dir / "index.html"
