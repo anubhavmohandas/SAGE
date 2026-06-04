@@ -370,23 +370,61 @@ def _matches_stack(cve_entry: dict, stack: dict[str, str]) -> Optional[dict]:
 
 def _names_match(cpe_name: str, pkg_name: str) -> bool:
     """
-    Fuzzy match between CPE package name and repo package name.
+    Match CPE package name against repo package name.
 
-    Examples that should match:
-      "python_requests" == "requests"   → True
-      "requests"        == "requests"   → True
-      "django"          == "django"     → True
-      "django"          == "flask"      → False
+    Rules (in order):
+      1. Exact match after normalization
+      2. Known alias table (PyPI name → common CPE names)
 
-    Teaching note:
-        CPE names often have ecosystem prefixes like "python_" or "nodejs_".
-        We strip those and compare the base name.
+    We do NOT use substring matching — it causes false positives:
+      "i" (IBM i OS) matches "click" via "i in click"
+      "cli" (Bitwarden CLI) matches "click" via "cli in click"
+      "rich" matches "richfilemanager" via "rich in richfilemanager"
     """
-    # Normalize
-    cpe  = re.sub(r"^(python_|nodejs_|node_|ruby_|php_)", "", cpe_name)
-    pkg  = re.sub(r"^(python_|nodejs_|node_|ruby_|php_)", "", pkg_name)
+    # Known PyPI → CPE name aliases
+    ALIASES: dict[str, set[str]] = {
+        "requests":       {"requests", "python_requests", "python-requests"},
+        "flask":          {"flask", "pallets_flask"},
+        "django":         {"django", "djangoproject_django"},
+        "aiohttp":        {"aiohttp", "aio_libs_aiohttp", "aiohttp_project"},
+        "click":          {"click", "pallets_click", "palletsprojects_click"},
+        "rich":           {"rich", "rich_project", "willmcgugan_rich"},
+        "cryptography":   {"cryptography", "pyca_cryptography"},
+        "pyyaml":         {"pyyaml", "yaml", "pyyaml_project"},
+        "pillow":         {"pillow", "python_pillow", "python-pillow"},
+        "numpy":          {"numpy", "numpy_numpy"},
+        "pandas":         {"pandas", "pandas_pandas"},
+        "sqlalchemy":     {"sqlalchemy", "sqlalchemy_sqlalchemy"},
+        "paramiko":       {"paramiko", "paramiko_paramiko"},
+        "urllib3":        {"urllib3", "urllib3_urllib3"},
+        "certifi":        {"certifi", "certifi_certifi"},
+        "setuptools":     {"setuptools", "python_setuptools"},
+        "pip":            {"pip", "pypa_pip"},
+        "werkzeug":       {"werkzeug", "pallets_werkzeug"},
+        "jinja2":         {"jinja2", "palletsprojects_jinja", "jinja2_jinja2"},
+        "twisted":        {"twisted", "twisted_twisted"},
+        "tornado":        {"tornado", "tornado_tornado"},
+        "starlette":      {"starlette", "encode_starlette"},
+        "fastapi":        {"fastapi", "tiangolo_fastapi"},
+        "httpx":          {"httpx", "encode_httpx"},
+        "pydantic":       {"pydantic", "pydantic_pydantic"},
+        "dnspython":      {"dnspython", "dnspython_dnspython"},
+        "python_dotenv":  {"python_dotenv", "python-dotenv", "dotenv"},
+        "python_whois":   {"python_whois", "python-whois"},
+        "phonenumbers":   {"phonenumbers", "googlei18n_libphonenumber"},
+    }
 
-    return cpe == pkg or cpe in pkg or pkg in cpe
+    # Normalize both
+    cpe = re.sub(r"^(python_|nodejs_|node_|ruby_|php_)", "", cpe_name)
+    pkg = re.sub(r"^(python_|nodejs_|node_|ruby_|php_)", "", pkg_name)
+
+    # 1. Exact match
+    if cpe == pkg:
+        return True
+
+    # 2. Alias lookup
+    aliases = ALIASES.get(pkg, set())
+    return cpe in aliases
 
 
 def _version_affected(installed: str, spec: str) -> bool:

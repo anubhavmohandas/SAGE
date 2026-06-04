@@ -318,6 +318,14 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
         if safe:
             if pkg not in bumps:
                 bumps[pkg] = (safe, [])
+            else:
+                # Take the highest safe version across all CVEs for this package
+                from packaging.version import Version
+                try:
+                    if Version(safe) > Version(bumps[pkg][0]):
+                        bumps[pkg] = (safe, bumps[pkg][1])
+                except Exception:
+                    pass
             bumps[pkg][1].append(cve_id)
 
     if not bumps:

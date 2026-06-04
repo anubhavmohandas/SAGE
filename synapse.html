@@ -66,9 +66,8 @@
     letter-spacing: 0.5px; transition: all 0.2s;
     font-family: 'SF Mono', monospace;
   }
-  body.dark  #controls button, #load-btn { background: rgba(100,180,255,0.08); border: 1px solid rgba(100,180,255,0.22); color: rgba(120,190,255,0.75); }
-  body.light #controls button, #load-btn { background: rgba(40,100,200,0.07); border: 1px solid rgba(40,100,200,0.22); color: rgba(30,80,160,0.8); }
-  #load-btn { border-radius: 5px; font-size: 10px; padding: 5px 13px; cursor: pointer; letter-spacing: 0.5px; font-family: 'SF Mono', monospace; transition: all 0.2s; }
+  body.dark  #controls button { background: rgba(100,180,255,0.08); border: 1px solid rgba(100,180,255,0.22); color: rgba(120,190,255,0.75); }
+  body.light #controls button { background: rgba(40,100,200,0.07); border: 1px solid rgba(40,100,200,0.22); color: rgba(30,80,160,0.8); }
   body.dark  #controls button:hover:not(:disabled) { background: rgba(100,180,255,0.18); }
   body.light #controls button:hover:not(:disabled) { background: rgba(40,100,200,0.15); }
   #controls button:disabled { opacity: 0.22; cursor: default; }
@@ -110,9 +109,6 @@
   <button id="back" disabled>← BACK</button>
   <button id="reset">RESET</button>
   <button id="export">SAVE PNG</button>
-  <label id="load-btn" title="Load synapse_graph.json">LOAD GRAPH
-    <input type="file" id="load-input" accept=".json" style="display:none">
-  </label>
   <button id="theme-toggle" title="Toggle theme">☀️</button>
 </div>
 
@@ -187,7 +183,10 @@ Object.keys(GRAPH.nodes).forEach(id => connCount[id] = 0);
 GRAPH.edges.forEach(([a,b]) => { connCount[a]++; connCount[b]++; });
 
 function nodeRadius(id) {
-  return 20 + Math.min(connCount[id] * 3, 14);
+  // CVE nodes always a fixed prominent size; others scale by connection count
+  const node = GRAPH.nodes[id];
+  if (node && node.type === 'cve') return 16;
+  return 18 + Math.min(connCount[id] * 2, 12);
 }
 
 const TYPE_ICON = { file:'{ }', function:'()', library:'⬡', cve:'⚠' };
@@ -233,15 +232,16 @@ let tween = null; // { from:{}, to:{}, t, duration }
 
 // Type visibility rules per center node type
 const VISIBLE_TYPES = {
-  file:     ['file', 'library', 'cve'],
-  library:  ['function', 'file', 'cve'],
+  // library view: only CVEs and files — functions are drill-down noise at this level
+  file:     ['library', 'cve', 'file'],
+  library:  ['cve', 'file'],
   function: ['library', 'cve'],
   cve:      ['library', 'file'],
-  unknown:  ['file', 'library', 'cve'],
+  unknown:  ['library', 'cve', 'file'],
 };
 
 // Max neighbours to show per level
-const MAX_NEIGHBOURS = 10;
+const MAX_NEIGHBOURS = 30;
 
 function getConnectedIds(nodeId) {
   const node       = GRAPH.nodes[nodeId];
@@ -275,7 +275,9 @@ function layout(animate = false) {
   const visibleIds  = getConnectedIds(centerNodeId);
   const neighbours  = visibleIds.filter(id => id !== centerNodeId);
   const n = neighbours.length;
-  const R = Math.min(W, H) * 0.32;
+  // Scale ring radius with neighbour count so nodes don't crowd
+  const baseR = Math.min(W, H) * 0.32;
+  const R = n <= 8 ? baseR : Math.min(baseR * (1 + (n - 8) * 0.04), Math.min(W, H) * 0.44);
 
   const newPositions = {};
   newPositions[centerNodeId] = { x: cx, y: cy };
@@ -486,7 +488,7 @@ function drawNode(id) {
 
   // Label outside
   const angle = isCenter ? -Math.PI/2 : Math.atan2(rawPos.y - canvas.height/2, rawPos.x - canvas.width/2);
-  const ldist = r + 46;
+  const ldist = r + (isCenter ? 52 : 28);
   const lx = pos.x + Math.cos(angle)*ldist;
   const ly = pos.y + Math.sin(angle)*ldist;
 
@@ -717,21 +719,8 @@ document.getElementById('reset').addEventListener('click', doReset);
 document.getElementById('export').addEventListener('click', exportPNG);
 
 // ─── LOAD GRAPH FROM JSON ────────────────────────────────────────────────────
-document.getElementById('load-input').addEventListener('change', e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = ev => {
-    try {
-      const data = JSON.parse(ev.target.result);
-      loadGraphData(data);
-    } catch(err) {
-      alert('Invalid JSON file: ' + err.message);
-    }
-  };
-  reader.readAsText(file);
-});
-
+// NOTE: loadGraphData is called programmatically by the export pipeline.
+// The manual LOAD GRAPH button has been removed — always open demos/<repo>_<date>/index.html instead.
 function loadGraphData(data) {
   // Clear existing graph
   GRAPH.nodes = {};
@@ -764,23 +753,25 @@ function loadGraphData(data) {
     adjReverse[b].push(a);
   });
 
-  // Pick best root: most connected non-test source file
-  const sourceFiles = Object.keys(GRAPH.nodes).filter(id => {
-    const n = GRAPH.nodes[id];
-    return n.type === 'file' && !n.is_test &&
-           !id.includes('test') && !id.includes('__init__');
+  // Pick best root: library with the most CVEs attached (most security-relevant view)
+  const SEV_SCORE = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+  const libsWithCves = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'library');
+  libsWithCves.sort((a, b) => {
+    // Count CVE children and weight by severity
+    const score = id => (GRAPH.nodes[id].children || []).reduce((s, cid) => {
+      const sev = GRAPH.nodes[cid]?.severity || '';
+      return s + (SEV_SCORE[sev] || 0) + (GRAPH.nodes[cid]?.type === 'cve' ? 1 : 0);
+    }, 0);
+    return score(b) - score(a);
   });
-  const allFiles = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'file');
-  const candidates = sourceFiles.length > 0 ? sourceFiles : allFiles;
 
-  if (candidates.length > 0) {
-    candidates.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
-    centerNodeId = candidates[0];
+  if (libsWithCves.length > 0) {
+    centerNodeId = libsWithCves[0];
   } else {
-    // Fall back to most connected library if no files
-    const libs = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'library');
-    libs.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
-    centerNodeId = libs[0] || Object.keys(GRAPH.nodes)[0];
+    // Fall back to most connected file
+    const allFiles = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'file');
+    allFiles.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
+    centerNodeId = allFiles[0] || Object.keys(GRAPH.nodes)[0];
   }
   history = [];
   attackPath = null;
