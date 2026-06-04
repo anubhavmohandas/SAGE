@@ -24,8 +24,22 @@ from pathlib import Path
 from typing import Optional
 
 
-PROMPTS_DIR  = Path("data/prompts")
-RESPONSES_DIR = Path("data/responses")
+def _prompts_dir() -> Path:
+    try:
+        from sage.config import cfg
+        return cfg.data_dir("prompts")
+    except Exception:
+        return Path("data/prompts")
+
+def _responses_dir() -> Path:
+    try:
+        from sage.config import cfg
+        return cfg.data_dir("responses")
+    except Exception:
+        return Path("data/responses")
+
+PROMPTS_DIR  = Path("data/prompts")   # legacy fallback
+RESPONSES_DIR = Path("data/responses") # legacy fallback
 
 
 # ─── Main analysis function ───────────────────────────────────────────────────
@@ -47,18 +61,36 @@ def _model_for_severity(severity: str) -> str:
 
 def _ask_mode() -> str:
     """
-    Determine analysis mode. In non-interactive environments (CI, cron, scheduled tasks)
-    defaults to API mode automatically. Only prompts when running in a real terminal.
+    Determine analysis mode.
+
+    Priority:
+      1. Non-interactive (CI/cron/pipe) → API always.
+      2. API keys present in env → API automatically, no prompt.
+      3. No API keys + interactive → ask whether to do manual review.
     """
     import sys
-    # Non-interactive: stdin is not a TTY (CI, cron, pipe) — default to API
+    from sage.config import cfg
+
+    has_api_key = bool(cfg.ANTHROPIC_API_KEY or cfg.GEMINI_API_KEY)
+
+    # Non-interactive: use API (keys must be set in CI env)
     if not sys.stdin.isatty():
-        print("[analyzer] Non-interactive environment detected — using API mode")
+        if has_api_key:
+            print("[analyzer] Non-interactive — using API mode")
+        else:
+            print("[analyzer] Non-interactive, no API keys — exporting prompts for manual review")
+        return "api" if has_api_key else "manual"
+
+    # Interactive + keys present → use API, skip the question
+    if has_api_key:
+        model_hint = "Gemini" if cfg.GEMINI_API_KEY else "Claude"
+        print(f"[analyzer] API keys detected — using {model_hint} (API mode)")
         return "api"
 
+    # Interactive + no keys → ask
     print("\n[analyzer] ── Analysis Mode ──")
-    print("  Do you have a Gemini or Anthropic API key available for analysis?")
-    print("  [y] Yes — use API  |  [n] No — export prompts for manual review")
+    print("  No API keys found in .env.")
+    print("  [y] I'll add keys now and retry  |  [n] Export prompts for manual review")
     while True:
         choice = input("  Your choice (y/n): ").strip().lower()
         if choice in ("y", "yes"):
@@ -68,7 +100,12 @@ def _ask_mode() -> str:
         print("  Please enter y or n.")
 
 
-def analyze_findings(findings: list[dict], G, repo_path: str) -> list[dict]:
+def analyze_findings(
+    findings: list[dict],
+    G,
+    repo_path: str,
+    reach_results: Optional[list[dict]] = None,
+) -> list[dict]:
     """
     Determine analysis mode, then run accordingly.
 
@@ -76,35 +113,56 @@ def analyze_findings(findings: list[dict], G, repo_path: str) -> list[dict]:
                 Model is severity-gated: CRITICAL → Opus, others → Sonnet.
     Manual mode: exports prompt files → you paste into Claude chat → drop JSON responses.
     Non-interactive (CI/cron): always uses API mode without prompting.
+
+    reach_results: optional output from reachability.analyze_reachability() —
+                   passed as context into prompts for more accurate exploitability decisions.
     """
     mode = _ask_mode()
     if mode == "api":
-        return _analyze_api(findings, G, repo_path)
-    return _analyze_manual(findings, G, repo_path)
+        return _analyze_api(findings, G, repo_path, reach_results)
+    return _analyze_manual(findings, G, repo_path, reach_results)
 
 
-def _analyze_api(findings: list[dict], G, repo_path: str) -> list[dict]:
+def _analyze_api(
+    findings: list[dict],
+    G,
+    repo_path: str,
+    reach_results: Optional[list[dict]] = None,
+) -> list[dict]:
     """API mode — Gemini primary, Anthropic fallback, exponential backoff on 429."""
     by_cve = _group_by_cve(findings, G)
+    # Index reachability by cve_id for fast lookup
+    reach_by_cve: dict[str, list[dict]] = {}
+    if reach_results:
+        for r in reach_results:
+            reach_by_cve[r["cve_id"]] = r.get("paths", [])
     print(f"[analyzer] Analyzing {len(by_cve)} CVEs via API...")
     confirmed = []
     for cve_id, cve_findings in by_cve.items():
-        result = _analyze_single_cve_api(cve_id, cve_findings, G, repo_path)
+        result = _analyze_single_cve_api(
+            cve_id, cve_findings, G, repo_path,
+            reach_paths=reach_by_cve.get(cve_id),
+        )
         if result:
             confirmed.append(result)
     print(f"[analyzer] Confirmed: {len(confirmed)}/{len(by_cve)} CVEs actually exploitable")
     return confirmed
 
 
-def _analyze_manual(findings: list[dict], G, repo_path: str) -> list[dict]:
+def _analyze_manual(
+    findings: list[dict],
+    G,
+    repo_path: str,
+    reach_results: Optional[list[dict]] = None,
+) -> list[dict]:
     """
     Manual mode — export prompts, read existing responses.
 
     First run: generates prompts, returns [].
     Subsequent runs: reads responses you've saved, returns confirmed list.
     """
-    PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
-    RESPONSES_DIR.mkdir(parents=True, exist_ok=True)
+    _prompts_dir().mkdir(parents=True, exist_ok=True)
+    _responses_dir().mkdir(parents=True, exist_ok=True)
 
     # Group findings by CVE
     by_cve = {}
@@ -126,7 +184,7 @@ def _analyze_manual(findings: list[dict], G, repo_path: str) -> list[dict]:
     skipped = 0
 
     for cve_id, cve_findings in by_cve.items():
-        response_file = RESPONSES_DIR / f"{cve_id}.json"
+        response_file = _responses_dir() / f"{cve_id}.json"
 
         # If response exists — read it
         if response_file.exists():
@@ -136,15 +194,22 @@ def _analyze_manual(findings: list[dict], G, repo_path: str) -> list[dict]:
             continue
 
         # No response — export prompt if not already done
-        prompt_file = PROMPTS_DIR / f"{cve_id}.txt"
+        prompt_file = _prompts_dir() / f"{cve_id}.txt"
+        reach_by_cve: dict[str, list[dict]] = {}
+        if reach_results:
+            for r in reach_results:
+                reach_by_cve[r["cve_id"]] = r.get("paths", [])
         if not prompt_file.exists():
-            _export_prompt(cve_id, cve_findings, G, repo_path)
+            _export_prompt(
+                cve_id, cve_findings, G, repo_path,
+                reach_paths=reach_by_cve.get(cve_id),
+            )
             new_prompts += 1
         else:
             skipped += 1
 
-    total_with_prompts = len(list(PROMPTS_DIR.glob("*.txt")))
-    total_with_responses = len(list(RESPONSES_DIR.glob("*.json")))
+    total_with_prompts = len(list(_prompts_dir().glob("*.txt")))
+    total_with_responses = len(list(_responses_dir().glob("*.json")))
 
     print(f"[analyzer] Prompts exported: {new_prompts} new  |  {skipped} already existed")
     print(f"[analyzer] Responses read:   {total_with_responses}/{total_with_prompts}")
@@ -152,13 +217,20 @@ def _analyze_manual(findings: list[dict], G, repo_path: str) -> list[dict]:
 
     if new_prompts > 0 or (total_with_prompts > total_with_responses):
         pending = total_with_prompts - total_with_responses
+        pending_files = sorted([
+            f for f in _prompts_dir().glob("*.txt")
+            if not (_responses_dir() / f.name.replace(".txt", ".json")).exists()
+        ])
         print(f"\n[analyzer] ── Manual review needed ──")
-        print(f"  {pending} CVE(s) awaiting your review.")
-        print(f"  Prompts → {PROMPTS_DIR.resolve()}/")
-        print(f"  1. Open each CVE-XXXX.txt")
-        print(f"  2. Paste into Claude chat")
-        print(f"  3. Save Claude's JSON response as {RESPONSES_DIR.resolve()}/CVE-XXXX.json")
-        print(f"  4. Re-run: python3 main.py --synapse <repo>")
+        print(f"  {pending} CVE(s) awaiting your review.\n")
+        for pf in pending_files:
+            print(f"  ┌─ {pf.name} ─────────────────────────────────────────")
+            print(f"  │  cat \"{pf.resolve()}\"")
+            resp_path = _responses_dir() / pf.name.replace(".txt", ".json")
+            print(f"  │  Paste content into Claude → save response as:")
+            print(f"  │  \"{resp_path.resolve()}\"")
+            print(f"  └────────────────────────────────────────────────────\n")
+        print(f"  Re-run after saving responses: python3 main.py --synapse <repo>")
 
     return confirmed
 
@@ -179,7 +251,13 @@ def _group_by_cve(findings: list[dict], G) -> dict:
 
 # ─── API mode internals ───────────────────────────────────────────────────────
 
-def _analyze_single_cve_api(cve_id: str, findings: list[dict], G, repo_path: str) -> Optional[dict]:
+def _analyze_single_cve_api(
+    cve_id: str,
+    findings: list[dict],
+    G,
+    repo_path: str,
+    reach_paths: Optional[list[dict]] = None,
+) -> Optional[dict]:
     from sage.synapse.mapper import get_blast_radius
     from sage.config import cfg
 
@@ -204,7 +282,7 @@ def _analyze_single_cve_api(cve_id: str, findings: list[dict], G, repo_path: str
         print(f"[analyzer] {cve_id} — no code to analyze, skipping")
         return None
 
-    prompt = _build_prompt(cve_id, severity, package, cwe, affected_r, function_codes, findings)
+    prompt = _build_prompt(cve_id, severity, package, cwe, affected_r, function_codes, findings, reach_paths)
 
     response = _call_llm_api(prompt, cve_id, cfg, severity)
     if not response:
@@ -323,7 +401,13 @@ def _strip_fences(raw: str) -> str:
 
 # ─── Prompt export ────────────────────────────────────────────────────────────
 
-def _export_prompt(cve_id: str, findings: list[dict], G, repo_path: str):
+def _export_prompt(
+    cve_id: str,
+    findings: list[dict],
+    G,
+    repo_path: str,
+    reach_paths: Optional[list[dict]] = None,
+):
     """Build and save the analysis prompt for a CVE."""
     from sage.synapse.mapper import get_blast_radius
 
@@ -359,9 +443,10 @@ def _export_prompt(cve_id: str, findings: list[dict], G, repo_path: str):
         affected_range=affected_r,
         function_codes=function_codes,
         semgrep_findings=findings,
+        reach_paths=reach_paths,
     )
 
-    prompt_file = PROMPTS_DIR / f"{cve_id}.txt"
+    prompt_file = _prompts_dir() / f"{cve_id}.txt"
     prompt_file.write_text(prompt)
     print(f"[analyzer] Prompt saved → {prompt_file}")
 
@@ -374,6 +459,7 @@ def _build_prompt(
     affected_range: str,
     function_codes: list[dict],
     semgrep_findings: list[dict],
+    reach_paths: Optional[list[dict]] = None,
 ) -> str:
     code_section = ""
     if function_codes:
@@ -399,6 +485,17 @@ def _build_prompt(
     else:
         semgrep_section = "\n\nSEMGREP FINDINGS: None.\n"
 
+    # Reachability section — the key context that distinguishes exploitable from theoretical
+    reach_section = ""
+    if reach_paths:
+        reach_section = "\n\nREACHABILITY ANALYSIS (call paths from entry points to vulnerable library):\n"
+        for p in reach_paths[:5]:
+            arrow = " → ".join(p["path"])
+            reach_section += f"  [{p['entry_type']:14s}]  {arrow}\n"
+        reach_section += "\nNote: these are static call paths. Dynamic dispatch may add or remove paths.\n"
+    else:
+        reach_section = "\n\nREACHABILITY ANALYSIS: No direct call paths found from entry points to this library.\n"
+
     return f"""You are a security vulnerability analyst. Determine if this CVE is actually exploitable in this specific codebase.
 
 CVE INFORMATION:
@@ -407,15 +504,19 @@ CVE INFORMATION:
 - Affected package: {package}
 - Affected versions: {affected_range}
 - CWE: {cwe or 'Not specified'}
-{code_section}{semgrep_section}
+{code_section}{semgrep_section}{reach_section}
 
 TASK:
 Is this CVE exploitable given how the library is actually used in the code above?
-Consider: can user-controlled input reach the vulnerable code path?
+Consider:
+1. Can user-controlled input reach the vulnerable code path?
+2. Do the reachability paths lead through user-facing entry points?
+3. Does the code use the specific vulnerable API/function of the library?
 
 RULES:
 - Base answer ONLY on the code shown
 - If no function code, base on library usage pattern
+- If reachability paths exist but don't go through user-facing entry points, lower confidence
 - Be conservative — if uncertain, mark vulnerable with low confidence
 
 OUTPUT: Respond with ONLY valid JSON. No text before or after. No markdown fences.
@@ -425,7 +526,7 @@ OUTPUT: Respond with ONLY valid JSON. No text before or after. No markdown fence
   "confidence": 0.0 to 1.0,
   "reason": "one sentence explaining your decision",
   "affected_functions": ["function_name1"],
-  "attack_vector": "how an attacker could exploit this, or empty string if not vulnerable",
+  "attack_vector": "how an attacker could reach the vulnerable code, or empty string if not vulnerable",
   "recommendation": "specific fix recommendation, or empty string if not vulnerable"
 }}"""
 
@@ -434,7 +535,7 @@ OUTPUT: Respond with ONLY valid JSON. No text before or after. No markdown fence
 
 def _read_response(cve_id: str, findings: list[dict], G) -> Optional[dict]:
     """Read a manually saved response JSON for a CVE."""
-    response_file = RESPONSES_DIR / f"{cve_id}.json"
+    response_file = _responses_dir() / f"{cve_id}.json"
     try:
         response = json.loads(response_file.read_text())
     except Exception as e:

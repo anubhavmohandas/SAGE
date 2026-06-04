@@ -33,6 +33,7 @@ from sage.patcher.llm  import run_patcher, print_patch_summary
 from sage.tests.runner    import run_tests, print_test_summary, save_test_results
 from sage.verifier.semgrep import run_verifier, print_verifier_summary, save_verifier_results
 from sage.github.pr        import run_github_pr, print_pr_summary, save_pr_result
+from sage.reachability     import analyze_reachability, print_reachability_summary, save_reachability
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -51,6 +52,10 @@ def run_fetch(repo_path: str, days: int = 1):
     print(f"  Repo: {repo_path}")
     print(f"  Days: last {days} day(s)")
     print(f"{'='*60}\n")
+
+    # Set repo context — scopes all data/ paths to data/<repo_name>/
+    cfg.set_repo(repo_path)
+    init_db()  # must come after set_repo()
 
     # Step 1 — Detect repo stack
     print("[SAGE] Step 1/4 — Detecting repo stack...")
@@ -123,6 +128,9 @@ def run_synapse(repo_path: str):
     Build the Synapse knowledge graph for a repo.
     Parses code, attaches CVEs, exports synapse_graph.json.
     """
+    # Set repo context first — all data paths scope to data/<repo_name>/
+    cfg.set_repo(repo_path)
+    init_db()  # must come after set_repo() so DB lands in data/<repo_name>/
     print_banner("SYNAPSE — Knowledge Graph Builder")
 
     log("SAGE", "Synapse Step 1/4 — Parsing codebase...")
@@ -134,8 +142,13 @@ def run_synapse(repo_path: str):
     log("SAGE", "Synapse Step 3/4 — Attaching CVE nodes...")
     G = attach_cves(G)
 
+    log("SAGE", "Synapse Step 3.5/4 — Analyzing attack reachability...")
+    reach_results = analyze_reachability(G)
+    save_reachability(reach_results)
+    print_reachability_summary(reach_results)
+
     log("SAGE", "Synapse Step 4/4 — Exporting graph...")
-    out_path = export_graph(G, repo_path=repo_path)
+    out_path = export_graph(G, repo_path=repo_path, reach_results=reach_results)
 
     # Blast radius table
     cve_nodes = [n for n in G.nodes() if n.startswith("cve:")]
@@ -162,7 +175,7 @@ def run_synapse(repo_path: str):
     # Step 5 — Analyzer
     print_banner("ANALYZER — LLM Vulnerability Confirmation")
     log("SAGE", "Analyzer Step 1/1 — Confirming exploitability...")
-    confirmed = analyze_findings(findings, G, repo_path)
+    confirmed = analyze_findings(findings, G, repo_path, reach_results=reach_results)
     save_confirmed(confirmed)
     print_analysis_summary(confirmed)
 
@@ -269,8 +282,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Initialize DB on every run
-    init_db()
+    # DB init happens inside run_synapse/run_fetch after set_repo() so it's repo-scoped.
+    # Only init here for commands that don't have a repo path.
+    if args.status or args.cve:
+        init_db()
 
     if args.status:
         run_status()

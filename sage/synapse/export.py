@@ -49,7 +49,12 @@ OUTPUT_PATH = Path("data/synapse_graph.json")
 _CURRENT_REPO_NAME = ""  # set by export_graph from repo_path
 
 
-def export_graph(G: nx.DiGraph, output_path: Optional[str] = None, repo_path: Optional[str] = None) -> str:
+def export_graph(
+    G: nx.DiGraph,
+    output_path: Optional[str] = None,
+    repo_path: Optional[str] = None,
+    reach_results: Optional[list] = None,
+) -> str:
     """
     Export the NetworkX graph to synapse_graph.json.
 
@@ -125,7 +130,19 @@ def export_graph(G: nx.DiGraph, output_path: Optional[str] = None, repo_path: Op
             "label":  label,
         })
 
-    output = {"nodes": nodes, "links": links}
+    # Embed attack paths from reachability analysis
+    # Format: list of {cve_id, severity, reachable, paths: [{entry, path, depth, entry_type}]}
+    attack_paths: list[dict] = []
+    if reach_results:
+        for r in reach_results:
+            if r.get("reachable") and r.get("paths"):
+                attack_paths.append({
+                    "cve_id":   r["cve_id"],
+                    "severity": r.get("severity", "UNKNOWN"),
+                    "paths":    r["paths"][:5],  # top 5 paths per CVE
+                })
+
+    output = {"nodes": nodes, "links": links, "attack_paths": attack_paths}
 
     with open(out, "w") as f:
         json.dump(output, f, indent=2)

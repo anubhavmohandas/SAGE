@@ -34,7 +34,14 @@ from typing import Optional
 from sage.config import cfg
 
 
-PATCHES_DIR = Path("data/patches")
+def _patches_dir() -> Path:
+    try:
+        from sage.config import cfg
+        return cfg.data_dir("patches")
+    except Exception:
+        return Path("data/patches")
+
+PATCHES_DIR = Path("data/patches")  # legacy fallback
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
@@ -49,7 +56,7 @@ def run_patcher(confirmed: list[dict], repo_path: str, all_cves: list[dict] = No
         all_cves:   All CVEs (from DB) for dep bump, even non-exploitable ones.
                     If None, only confirmed CVEs get dep bumps.
     """
-    PATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    pd = _patches_dir()
 
     print(f"[patcher] {len(confirmed)} confirmed exploitable CVE(s) → code patches")
 
@@ -68,7 +75,7 @@ def run_patcher(confirmed: list[dict], repo_path: str, all_cves: list[dict] = No
     print(f"\n[patcher] ── Patch Summary ──")
     print(f"  Code patches generated: {len(code_patches)}")
     print(f"  Dep bump generated:     {'yes' if req_patch else 'no'}")
-    print(f"  Output → {PATCHES_DIR.resolve()}/")
+    print(f"  Output → {pd.resolve()}/")
 
     return {
         "code_patches": code_patches,
@@ -96,7 +103,7 @@ def _generate_code_patch(vuln: dict, repo_path: str) -> Optional[dict]:
         print(f"[patcher] {cve_id} — no function code available, skipping code patch")
         return None
 
-    patch_dir = PATCHES_DIR / cve_id
+    patch_dir = _patches_dir() / cve_id
     patch_dir.mkdir(parents=True, exist_ok=True)
 
     # Build prompt for Claude
@@ -377,16 +384,17 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
 
     new_content = "\n".join(new_lines) + "\n"
 
-    # Write to patches dir
-    out_path = PATCHES_DIR / "requirements.txt"
+    # Write to repo-scoped patches dir
+    pd = _patches_dir()
+    out_path = pd / "requirements.txt"
     out_path.write_text(new_content)
 
     # Also write a diff
     diff = _generate_diff(original_content, new_content, "a/requirements.txt", "b/requirements.txt")
-    (PATCHES_DIR / "requirements.patch").write_text(diff)
+    (pd / "requirements.patch").write_text(diff)
 
     print(f"[patcher] Dep bump written → {out_path}")
-    print(f"[patcher] Diff written     → {PATCHES_DIR}/requirements.patch")
+    print(f"[patcher] Diff written     → {pd}/requirements.patch")
 
     return {
         "file":    str(out_path),

@@ -28,23 +28,27 @@ from datetime import datetime, timezone
 from typing import Optional
 
 
-# DB file location — relative to project root
-DB_PATH = Path("data/sage.db")
+# DB file location — repo-scoped at runtime via cfg.data_dir()
+_LEGACY_DB_PATH = Path("data/sage.db")
+
+
+def _db_path() -> Path:
+    """Return the repo-scoped DB path (data/<repo_name>/sage.db)."""
+    try:
+        from sage.config import cfg
+        return cfg.data_dir() / "sage.db"
+    except Exception:
+        return _LEGACY_DB_PATH
 
 
 def _get_connection() -> sqlite3.Connection:
     """
     Get a database connection.
-    Creates the data/ directory and DB file if they don't exist.
-
-    Teaching note:
-        We use check_same_thread=False because SAGE's pipeline
-        may eventually run stages concurrently.
-        row_factory = sqlite3.Row lets us access columns by name
-        instead of index: row["cve_id"] instead of row[0].
+    Creates the data/<repo>/ directory and DB file if they don't exist.
     """
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    p = _db_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
