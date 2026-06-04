@@ -407,19 +407,39 @@ def _extract_safe_version(affected_range: str) -> Optional[str]:
     """
     Extract safe minimum version from CVE affected_range string.
 
-    Examples:
-      "<3.13.3"     → "3.13.3"
-      ">=3.0,<3.9"  → "3.9"
-      "<8.3.3"      → "8.3.3"
-      ""            → None
+    Handles both strict (<) and inclusive (<=) upper bounds:
+      "<3.13.4"      → "3.13.4"      (first version NOT affected)
+      "<=3.13.3"     → "3.13.4"      (bump patch by 1 — <=X means X is still bad)
+      ">=3.0,<3.9"   → "3.9"
+      ">=2.0,<=2.8.3" → "2.8.4"
+      ""              → None
     """
     import re
+    from packaging.version import Version
+
     if not affected_range:
         return None
-    # Find all "<X.Y.Z" patterns — safe version is the upper bound
-    matches = re.findall(r"<\s*([\d.]+)", affected_range)
-    if matches:
-        return matches[-1]  # take the last upper bound
+
+    # Prefer strict upper bound: <X.Y.Z → safe version is X.Y.Z
+    strict = re.findall(r"(?<!<)<\s*([\d.]+)", affected_range)  # < but not <=
+    # Separate: find <=X.Y.Z
+    inclusive = re.findall(r"<=\s*([\d.]+)", affected_range)
+
+    if strict:
+        return strict[-1]
+
+    if inclusive:
+        # Bump the patch component by 1
+        try:
+            v = Version(inclusive[-1])
+            parts = list(v.release)
+            while len(parts) < 3:
+                parts.append(0)
+            parts[-1] += 1
+            return ".".join(str(p) for p in parts)
+        except Exception:
+            return inclusive[-1]  # fallback: return as-is
+
     return None
 
 

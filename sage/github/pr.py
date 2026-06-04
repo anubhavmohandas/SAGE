@@ -140,8 +140,15 @@ def run_github_pr(
     pr_title = _build_pr_title(confirmed, all_cves)
     pr_body  = _build_pr_body(confirmed, all_cves, patch_result, test_results, verify_results)
 
+    # Resolve the correct GitHub repo for this repo_path.
+    # GITHUB_REPO in .env may point to a different project (e.g. CyberTrace when
+    # scanning SAGE). Always prefer the repo that owns the branch we just pushed.
+    target_repo = _detect_github_repo(repo_path) or cfg.GITHUB_REPO
+    if target_repo != cfg.GITHUB_REPO:
+        print(f"[github] Note: GITHUB_REPO env={cfg.GITHUB_REPO}, using detected repo={target_repo}")
+
     pr_url = _create_github_pr(
-        repo=cfg.GITHUB_REPO,
+        repo=target_repo,
         token=cfg.GITHUB_TOKEN,
         branch=branch,
         title=pr_title,
@@ -157,6 +164,30 @@ def run_github_pr(
 
 
 # ─── Git operations ───────────────────────────────────────────────────────────
+
+def _detect_github_repo(repo_path: str) -> Optional[str]:
+    """
+    Extract owner/repo from the git remote URL of repo_path.
+
+    Handles both HTTPS and SSH remotes:
+      https://github.com/owner/repo.git  → owner/repo
+      git@github.com:owner/repo.git      → owner/repo
+    """
+    import re as _re
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+        url = result.stdout.strip()
+        # HTTPS
+        m = _re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", url)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return None
+
 
 def _git_create_branch(repo_path: str, branch: str) -> tuple[bool, str]:
     """Create and checkout a new branch from the default branch."""
