@@ -83,8 +83,8 @@ def run_github_pr(
     verify_passed = verify_results.get("passed", False)
     is_draft = not tests_passed  # draft if tests failed
 
-    # Branch name
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    # Branch name — include time to avoid conflicts on same-day re-runs
+    date_str = datetime.now().strftime("%Y-%m-%d-%H%M")
     branch   = f"sage/security-patch-{date_str}"
 
     print(f"[github] Creating branch: {branch}")
@@ -110,6 +110,16 @@ def run_github_pr(
         print("[github] Nothing applied — aborting")
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": "No files changed"}
+
+    # Check if there's actually a diff — repo may already be patched
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path, capture_output=True, text=True, timeout=10,
+    )
+    if not status.stdout.strip():
+        print("[github] Repo already up to date — patches match current HEAD, no PR needed")
+        _git_cleanup(repo_path, branch)
+        return {"skipped": True, "reason": "Repo already patched — all fixes already on main"}
 
     # Step 3 — Commit
     commit_msg = _build_commit_message(confirmed, all_cves)
@@ -218,13 +228,26 @@ def _build_commit_message(confirmed: list[dict], all_cves: list[dict]) -> str:
 
 def _git_commit(repo_path: str, message: str) -> tuple[bool, str]:
     try:
-        subprocess.run(["git", "add", "-A"], cwd=repo_path, capture_output=True, timeout=10)
+        # Check what's staged before committing
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+        if not status.stdout.strip():
+            return False, "nothing to commit — file content identical to branch HEAD (already patched?)"
+
+        add_result = subprocess.run(
+            ["git", "add", "-A"], cwd=repo_path, capture_output=True, text=True, timeout=10
+        )
+
         result = subprocess.run(
             ["git", "commit", "-m", message],
             cwd=repo_path, capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
-            return False, result.stderr.strip()
+            # git writes commit errors to both stdout and stderr
+            err = (result.stderr.strip() or result.stdout.strip()) or "unknown commit error"
+            return False, err
         return True, ""
     except Exception as e:
         return False, str(e)

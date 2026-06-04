@@ -39,43 +39,116 @@ from sage.synapse.mapper import get_blast_radius
 
 
 # CWE → Semgrep rule pack mapping
+# Covers all major CWEs from NVD CVE data
 CWE_TO_RULES = {
-    "CWE-89":  ["p/sql-injection"],                        # SQL Injection
-    "CWE-79":  ["p/xss"],                                  # XSS
-    "CWE-78":  ["p/command-injection"],                    # OS Command Injection
-    "CWE-77":  ["p/command-injection"],                    # Command Injection (generic)
-    "CWE-22":  ["p/path-traversal"],                       # Path Traversal
-    "CWE-400": ["p/regex", "p/security-audit"],            # ReDoS / Resource exhaustion
-    "CWE-502": ["p/deserialization"],                      # Unsafe Deserialization
-    "CWE-918": ["p/ssrf"],                                 # SSRF
-    "CWE-611": ["p/xss"],                                  # XXE
-    "CWE-20":  ["p/security-audit", "p/owasp-top-ten"],   # Improper Input Validation
-    "CWE-200": ["p/secrets", "p/security-audit"],          # Info Exposure
-    "CWE-312": ["p/secrets"],                              # Cleartext storage of sensitive info
-    "CWE-327": ["p/cryptography"],                         # Weak crypto algorithm
-    "CWE-330": ["p/cryptography"],                         # Insufficient randomness
-    "CWE-601": ["p/security-audit"],                       # Open Redirect
-    "CWE-94":  ["p/security-audit"],                       # Code Injection
-    "CWE-611": ["p/security-audit"],                       # XML Injection
-    "CWE-703": ["p/security-audit"],                       # Improper error handling
-    "CWE-295": ["p/security-audit"],                       # Improper cert validation
+    # Injection
+    "CWE-89":  ["p/sql-injection"],                              # SQL Injection
+    "CWE-79":  ["p/xss"],                                        # XSS
+    "CWE-78":  ["p/command-injection"],                          # OS Command Injection
+    "CWE-77":  ["p/command-injection"],                          # Command Injection (generic)
+    "CWE-88":  ["p/command-injection"],                          # Argument injection
+    "CWE-94":  ["p/security-audit"],                             # Code Injection
+    "CWE-95":  ["p/security-audit"],                             # Eval injection
+    "CWE-96":  ["p/security-audit"],                             # Static code injection
+    "CWE-643": ["p/security-audit"],                             # XPath injection
+    # Path / File
+    "CWE-22":  ["p/path-traversal"],                             # Path Traversal
+    "CWE-23":  ["p/path-traversal"],                             # Relative path traversal
+    "CWE-36":  ["p/path-traversal"],                             # Absolute path traversal
+    "CWE-434": ["p/security-audit"],                             # Unrestricted file upload
+    "CWE-73":  ["p/path-traversal"],                             # External control of file name
+    # Crypto / Secrets
+    "CWE-327": ["p/cryptography"],                               # Weak crypto algorithm
+    "CWE-326": ["p/cryptography"],                               # Inadequate encryption strength
+    "CWE-330": ["p/cryptography"],                               # Insufficient randomness
+    "CWE-331": ["p/cryptography"],                               # Insufficient entropy
+    "CWE-312": ["p/secrets"],                                    # Cleartext storage
+    "CWE-319": ["p/secrets"],                                    # Cleartext transmission
+    "CWE-798": ["p/secrets"],                                    # Hardcoded credentials
+    "CWE-259": ["p/secrets"],                                    # Hardcoded password
+    # Auth / Access
+    "CWE-284": ["p/security-audit"],                             # Improper access control
+    "CWE-285": ["p/security-audit"],                             # Improper authorization
+    "CWE-287": ["p/security-audit"],                             # Improper authentication
+    "CWE-306": ["p/security-audit"],                             # Missing auth for critical function
+    "CWE-307": ["p/security-audit"],                             # Brute force
+    "CWE-384": ["p/security-audit"],                             # Session fixation
+    "CWE-613": ["p/security-audit"],                             # Insufficient session expiration
+    # Deserialization / Memory
+    "CWE-502": ["p/deserialization"],                            # Unsafe deserialization
+    "CWE-119": ["p/security-audit"],                             # Buffer overflow
+    "CWE-125": ["p/security-audit"],                             # Out-of-bounds read
+    "CWE-787": ["p/security-audit"],                             # Out-of-bounds write
+    # Network / SSRF
+    "CWE-918": ["p/ssrf"],                                       # SSRF
+    "CWE-611": ["p/security-audit"],                             # XXE / XML injection
+    "CWE-601": ["p/security-audit"],                             # Open redirect
+    "CWE-295": ["p/security-audit"],                             # Improper cert validation
+    # DoS / Resource
+    "CWE-400": ["p/regex", "p/security-audit"],                  # Resource exhaustion / ReDoS
+    "CWE-770": ["p/security-audit"],                             # Unrestricted resource allocation
+    "CWE-776": ["p/security-audit"],                             # Recursive entity expansion
+    "CWE-835": ["p/security-audit"],                             # Infinite loop
+    # Info exposure
+    "CWE-200": ["p/secrets", "p/security-audit"],                # Info exposure
+    "CWE-209": ["p/security-audit"],                             # Error message info leak
+    "CWE-532": ["p/secrets"],                                    # Sensitive info in logs
+    "CWE-779": ["p/security-audit"],                             # Logging excessive data
+    # Header / Protocol
+    "CWE-113": ["p/security-audit"],                             # HTTP response splitting
+    "CWE-444": ["p/security-audit"],                             # HTTP request smuggling
+    "CWE-116": ["p/security-audit"],                             # Improper encoding/escaping
+    # Input validation
+    "CWE-20":  ["p/security-audit", "p/owasp-top-ten"],          # Improper input validation
+    "CWE-74":  ["p/security-audit"],                             # Injection (generic)
+    "CWE-409": ["p/security-audit"],                             # Improper handling of compressed data
+    # Error handling
+    "CWE-703": ["p/security-audit"],                             # Improper error handling
+    "CWE-252": ["p/security-audit"],                             # Unchecked return value
 }
 
-# Library-specific rule packs — run these ON TOP of CWE rules
-# when that library is in the blast radius
+# Library-specific rule packs — run ON TOP of CWE rules
 LIBRARY_RULES = {
+    # Web frameworks
     "aiohttp":      ["p/aiohttp"],
     "flask":        ["p/flask"],
     "django":       ["p/django"],
+    "fastapi":      ["p/security-audit"],
+    "starlette":    ["p/security-audit"],
+    "tornado":      ["p/security-audit"],
+    # HTTP clients
     "requests":     ["p/ssrf"],
-    "dnspython":    ["p/regex"],
+    "httpx":        ["p/ssrf"],
+    "urllib3":      ["p/ssrf"],
+    "httplib2":     ["p/ssrf"],
+    # Database
     "sqlalchemy":   ["p/sql-injection"],
+    "pymongo":      ["p/security-audit"],
+    "redis":        ["p/security-audit"],
+    "psycopg2":     ["p/sql-injection"],
+    "pymysql":      ["p/sql-injection"],
+    # Auth / Crypto
     "jwt":          ["p/jwt"],
     "pyjwt":        ["p/jwt"],
     "cryptography": ["p/cryptography"],
     "paramiko":     ["p/security-audit"],
-    "urllib3":      ["p/ssrf"],
-    "httpx":        ["p/ssrf"],
+    "pyopenssl":    ["p/cryptography"],
+    # Parsing / Serialization
+    "pyyaml":       ["p/deserialization"],
+    "yaml":         ["p/deserialization"],
+    "pickle":       ["p/deserialization"],
+    "lxml":         ["p/security-audit"],
+    "xmltodict":    ["p/security-audit"],
+    # DNS / Network
+    "dnspython":    ["p/regex"],
+    "scapy":        ["p/security-audit"],
+    # Shell / Process
+    "subprocess":   ["p/command-injection"],
+    "os":           ["p/command-injection"],
+    "shlex":        ["p/command-injection"],
+    # Template engines
+    "jinja2":       ["p/xss"],
+    "mako":         ["p/xss"],
 }
 
 DEFAULT_RULES = ["p/python", "p/security-audit", "p/owasp-top-ten"]

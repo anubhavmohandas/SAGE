@@ -46,9 +46,10 @@ TYPE_COLORS = {
 }
 
 OUTPUT_PATH = Path("data/synapse_graph.json")
+_CURRENT_REPO_NAME = ""  # set by export_graph from repo_path
 
 
-def export_graph(G: nx.DiGraph, output_path: Optional[str] = None) -> str:
+def export_graph(G: nx.DiGraph, output_path: Optional[str] = None, repo_path: Optional[str] = None) -> str:
     """
     Export the NetworkX graph to synapse_graph.json.
 
@@ -64,8 +65,11 @@ def export_graph(G: nx.DiGraph, output_path: Optional[str] = None) -> str:
         The raw graph has minimal data — we add colors, labels, children
         lists here so the viz doesn't need to compute them.
     """
+    global _CURRENT_REPO_NAME
     out = Path(output_path) if output_path else OUTPUT_PATH
     out.parent.mkdir(parents=True, exist_ok=True)
+    if repo_path:
+        _CURRENT_REPO_NAME = Path(repo_path).name
 
     # Remove stdlib/noise libraries — not security relevant
     G = _filter_graph(G)
@@ -115,7 +119,58 @@ def export_graph(G: nx.DiGraph, output_path: Optional[str] = None) -> str:
     print(f"[export] {len(nodes)} nodes, {len(links)} edges")
     _print_summary(G)
 
+    # Auto-generate index.html with fresh data embedded
+    _generate_index_html(output, out.parent)
+
     return str(out)
+
+
+def _generate_index_html(graph_data: dict, output_dir: Path):
+    """
+    Inject fresh graph data into synapse.html template and write index.html.
+    This means you can just open index.html — no LOAD GRAPH click needed.
+    """
+    # Find synapse.html template (walk up from data/ to SAGE root)
+    template = None
+    for parent in output_dir.parents:
+        candidate = parent / "synapse.html"
+        if candidate.exists():
+            template = candidate
+            break
+
+    if not template:
+        print("[export] synapse.html template not found — skipping index.html generation")
+        return
+
+    html = template.read_text()
+
+    # Inject graph data as JS variable right before </body>
+    graph_json = json.dumps(graph_data, separators=(",", ":"))
+    inject = f"""
+<script>
+// Auto-injected by SAGE export — {len(graph_data['nodes'])} nodes, {len(graph_data['links'])} edges
+(function() {{
+  if (typeof loadGraphData === 'function') {{
+    loadGraphData({graph_json});
+  }}
+}})();
+</script>
+"""
+    html = html.replace("</body>", inject + "</body>")
+
+    # Write to demos/<repo>_<date>/index.html
+    from datetime import datetime
+    date_str  = datetime.now().strftime("%Y-%m-%d")
+    # output_dir is data/ — parent is SAGE root, not the scanned repo
+    # Pass repo_path separately via a module-level variable set by export_graph
+    repo_name = _CURRENT_REPO_NAME or "repo"
+    demo_dir  = output_dir.parent / "demos" / f"{repo_name}_{date_str}"
+    demo_dir.mkdir(parents=True, exist_ok=True)
+
+    index_path = demo_dir / "index.html"
+    index_path.write_text(html)
+    print(f"[export] index.html generated → {index_path}")
+    print(f"[export] Open in browser: file://{index_path.resolve()}")
 
 
 # Python stdlib modules — not security relevant, clutter the graph

@@ -19,6 +19,7 @@ import sys
 
 # Config loads first — fails fast if .env is missing keys
 from sage.config import cfg
+from sage.utils.colors import console, print_banner, log, log_success, log_fail, log_warn, print_pipeline_result
 from sage.fetcher.nvd    import fetch_cves_since, fetch_cve_by_id
 from sage.fetcher.filter import detect_stack, filter_relevant_cves
 from sage.fetcher.store  import init_db, save_cves, get_new_cves, get_summary
@@ -108,65 +109,50 @@ def run_synapse(repo_path: str):
     Build the Synapse knowledge graph for a repo.
     Parses code, attaches CVEs, exports synapse_graph.json.
     """
-    print(f"{'='*60}")
-    print(f"  SYNAPSE — Knowledge Graph Builder")
-    print(f"{'='*60}\n")
+    print_banner("SYNAPSE — Knowledge Graph Builder")
 
-    # Step 1 — Parse codebase
-    print("[SAGE] Synapse Step 1/3 — Parsing codebase...")
+    log("SAGE", "Synapse Step 1/3 — Parsing codebase...")
     G = parse_repo(repo_path)
 
-    # Step 2 — Attach CVEs from DB
-    print("\n[SAGE] Synapse Step 2/3 — Attaching CVE nodes...")
+    log("SAGE", "Synapse Step 2/3 — Attaching CVE nodes...")
     G = attach_cves(G)
 
-    # Step 3 — Export to JSON for visualization
-    print("\n[SAGE] Synapse Step 3/3 — Exporting graph...")
-    out_path = export_graph(G)
+    log("SAGE", "Synapse Step 3/3 — Exporting graph...")
+    out_path = export_graph(G, repo_path=repo_path)
 
-    # Show blast radius for each CVE
+    # Blast radius table
     cve_nodes = [n for n in G.nodes() if n.startswith("cve:")]
     if cve_nodes:
-        print(f"\n[SAGE] Blast radius analysis:")
-        for cve_node in cve_nodes[:10]:  # Show first 10
+        from sage.utils.colors import print_blast_table
+        blasts = []
+        for cve_node in cve_nodes[:10]:
             blast = get_blast_radius(G, cve_node)
             if blast:
-                print(f"  {blast['cve_id']:20s} → "
-                      f"{blast['affected_library']:15s} | "
-                      f"{len(blast['exposed_files'])} files, "
-                      f"{len(blast['exposed_functions'])} functions exposed")
+                blasts.append(blast)
+        if blasts:
+            console.print("\n[header]Blast Radius[/header]")
+            print_blast_table(blasts)
 
-    print(f"\n{'='*60}")
-    print(f"  Graph ready → {out_path}")
-    print(f"  Open synapse.html and load this file to visualize.")
-    print(f"{'='*60}\n")
+    log_success("SAGE", f"Graph ready → {out_path}  |  Open synapse.html to visualize")
 
-    # Step 4 — Run Semgrep on blast radius
-    print(f"{'='*60}")
-    print(f"  SCANNER — Semgrep Static Analysis")
-    print(f"{'='*60}\n")
-    print("[SAGE] Scanner Step 1/1 — Running Semgrep on exposed functions...")
+    # Step 4 — Scanner
+    print_banner("SCANNER — Semgrep Static Analysis")
+    log("SAGE", "Scanner Step 1/1 — Running Semgrep on exposed functions...")
     findings = scan_blast_radius(G, repo_path)
     save_findings(findings)
     print_findings_summary(findings)
 
-    # Step 5 — LLM Analyzer
-    print(f"\n{'='*60}")
-    print(f"  ANALYZER — LLM Vulnerability Confirmation")
-    print(f"{'='*60}\n")
-    print("[SAGE] Analyzer Step 1/1 — Confirming with Claude...")
+    # Step 5 — Analyzer
+    print_banner("ANALYZER — LLM Vulnerability Confirmation")
+    log("SAGE", "Analyzer Step 1/1 — Confirming exploitability...")
     confirmed = analyze_findings(findings, G, repo_path)
     save_confirmed(confirmed)
     print_analysis_summary(confirmed)
 
     # Step 6 — Patcher
-    print(f"\n{'='*60}")
-    print(f"  PATCHER — Automated Fix Generation")
-    print(f"{'='*60}\n")
-    print("[SAGE] Patcher Step 1/1 — Generating patches...")
+    print_banner("PATCHER — Automated Fix Generation")
+    log("SAGE", "Patcher Step 1/1 — Generating patches...")
 
-    # Pass all CVE nodes from graph for dep bump (not just confirmed)
-    # Dedup by cve_id — graph can have multiple edges for the same CVE
     seen_cves = set()
     all_cves = []
     for node, data in G.nodes(data=True):
@@ -185,28 +171,22 @@ def run_synapse(repo_path: str):
     print_patch_summary(patch_result)
 
     # Step 7 — Tests
-    print(f"\n{'='*60}")
-    print(f"  TESTS — Existing + Security Test Runner")
-    print(f"{'='*60}\n")
-    print("[SAGE] Tests Step 1/1 — Running tests...")
+    print_banner("TESTS — Existing + Security Test Runner")
+    log("SAGE", "Tests Step 1/1 — Running tests...")
     test_results = run_tests(patch_result, confirmed, repo_path)
     save_test_results(test_results)
     print_test_summary(test_results)
 
     # Step 8 — Verifier
-    print(f"\n{'='*60}")
-    print(f"  VERIFIER — Final Semgrep Check")
-    print(f"{'='*60}\n")
-    print("[SAGE] Verifier Step 1/1 — Running final Semgrep pass...")
+    print_banner("VERIFIER — Final Semgrep Check")
+    log("SAGE", "Verifier Step 1/1 — Running final Semgrep pass...")
     verify_results = run_verifier(patch_result, confirmed, repo_path)
     save_verifier_results(verify_results)
     print_verifier_summary(verify_results)
 
     # Step 9 — GitHub PR
-    print(f"\n{'='*60}")
-    print(f"  GITHUB — Pull Request")
-    print(f"{'='*60}\n")
-    print("[SAGE] GitHub Step 1/1 — Creating PR...")
+    print_banner("GITHUB — Pull Request")
+    log("SAGE", "GitHub Step 1/1 — Creating PR...")
     pr_result = run_github_pr(
         patch_result=patch_result,
         confirmed=confirmed,

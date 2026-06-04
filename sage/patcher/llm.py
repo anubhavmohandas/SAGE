@@ -327,7 +327,8 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
     # Rewrite requirements lines
     new_lines = []
     changed = []
-    already_changed = set()  # prevent duplicate entries in changed list
+    already_written = set()  # prevent duplicate output lines for same package
+    import re as _re
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -335,11 +336,13 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
             continue
 
         # Parse package name from line (handle pkg==x, pkg>=x, pkg, pkg[extra])
-        import re as _re
         m = _re.match(r'^([A-Za-z0-9_\-]+)(\[[^\]]+\])?', stripped)
         pkg_name = m.group(1).strip().lower().replace("_", "-") if m else ""
         extras   = m.group(2) or "" if m else ""  # e.g. [speedups]
         if pkg_name in bumps:
+            if pkg_name in already_written:
+                # Duplicate line for same package — skip it
+                continue
             safe_ver, cve_ids = bumps[pkg_name]
             # Deduplicate CVE list
             unique_cves = sorted(set(cve_ids))
@@ -347,10 +350,9 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
             base_name = m.group(1).strip() if m else pkg_name
             new_line = f"{base_name}{extras}>={safe_ver}  # SAGE: {', '.join(unique_cves)}"
             new_lines.append(new_line)
-            if pkg_name not in already_changed:
-                changed.append((pkg_name, safe_ver, unique_cves))
-                already_changed.add(pkg_name)
-                print(f"[patcher] Bumping {pkg_name} → >={safe_ver} ({len(unique_cves)} CVEs)")
+            already_written.add(pkg_name)
+            changed.append((pkg_name, safe_ver, unique_cves))
+            print(f"[patcher] Bumping {pkg_name} → >={safe_ver} ({len(unique_cves)} CVEs)")
         else:
             new_lines.append(line)
 
