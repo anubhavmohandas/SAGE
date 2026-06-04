@@ -230,6 +230,13 @@ def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: di
         patched_full = _apply_function_patch(original_code, func_name, patched)
         (patch_dir / f"patched_{safe_name}").write_text(patched_full)
 
+        # Write manifest entry so github/pr.py can reconstruct paths correctly
+        # (filename-based reconstruction breaks for nested paths like sage/fetcher/filter.py)
+        manifest_path = patch_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else []
+        manifest.append({"patched_file": f"patched_{safe_name}", "original_path": file_rel})
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
         # Generate diff
         diff = _generate_diff(
             original_code,

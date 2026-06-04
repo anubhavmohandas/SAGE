@@ -117,6 +117,7 @@
   <div class="leg"><div class="dot" style="background:#4db87a"></div> FUNCTION</div>
   <div class="leg"><div class="dot" style="background:#e8960a"></div> LIBRARY</div>
   <div class="leg"><div class="dot" style="background:#ff4444"></div> CVE</div>
+  <div class="leg"><div class="dot" style="background:#a78bfa"></div> REPO</div>
 </div>
 <div id="zoom-label">100%</div>
 
@@ -194,6 +195,7 @@ function cveColor(node) {
 
 function nodeRadius(id) {
   const node = GRAPH.nodes[id];
+  if (node && node.type === 'repo') return 32;
   if (node && node.type === 'cve') {
     const sev = (node.info || '').split(' ')[0].toUpperCase();
     return CVE_SEV_RADIUS[sev] || 16;
@@ -201,7 +203,7 @@ function nodeRadius(id) {
   return 18 + Math.min((connCount[id] || 0) * 2, 12);
 }
 
-const TYPE_ICON = { file:'{ }', function:'()', library:'⬡', cve:'⚠' };
+const TYPE_ICON = { file:'{ }', function:'()', library:'⬡', cve:'⚠', repo:'⬢' };
 
 // ─── ATTACK PATH TRACING ─────────────────────────────────────────────────────
 // BFS from a CVE back to root — returns Set of node IDs and edge pairs on the path
@@ -244,9 +246,13 @@ let tween = null; // { from:{}, to:{}, t, duration }
 
 // Type visibility rules per center node type
 const VISIBLE_TYPES = {
-  // library view: only CVEs and files — functions are drill-down noise at this level
-  file:     ['library', 'cve', 'file'],
+  // repo root: show all files — this is the entry point into the codebase
+  repo:     ['file'],
+  // file drill-down: show functions defined in it + libraries it imports
+  file:     ['function', 'library'],
+  // library: show CVEs affecting it + files that import it
   library:  ['cve', 'file'],
+  // function: show libraries it calls + CVEs on those libs
   function: ['library', 'cve'],
   cve:      ['library', 'file'],
   unknown:  ['library', 'cve', 'file'],
@@ -266,6 +272,18 @@ function getConnectedIds(nodeId) {
     if (a === nodeId && otherB && allowed.includes(otherB.type)) ids.add(b);
     if (b === nodeId && otherA && allowed.includes(otherA.type)) ids.add(a);
   });
+
+  // For file and function nodes: pull CVEs through their library neighbours (2-hop)
+  // So you can see: file → lib (orange) AND the CVE badge on that lib — without needing to click lib
+  if (centerType === 'file' || centerType === 'function') {
+    ids.forEach(libId => {
+      if (GRAPH.nodes[libId]?.type === 'library') {
+        GRAPH.edges.forEach(([a, b]) => {
+          if (a === libId && GRAPH.nodes[b]?.type === 'cve') ids.add(b);
+        });
+      }
+    });
+  }
 
   // Cap and prioritise: CVEs first, then libraries, then files, then functions
   const neighbours = [...ids].filter(id => id !== nodeId);
@@ -718,9 +736,11 @@ function goBack() {
   updateBackBtn();
   layout(true);
 }
+const _defaultRoot = GRAPH.nodes['root'] ? 'root' : Object.keys(GRAPH.nodes)[0] || 'root';
 function doReset() {
-  history=[]; centerNodeId='root';
-  setBreadcrumb('root'); updateBackBtn();
+  const resetTarget = GRAPH.nodes['repo:root'] ? 'repo:root' : _defaultRoot;
+  history=[]; centerNodeId=resetTarget;
+  setBreadcrumb(resetTarget); updateBackBtn();
   zoom=1; panX=0; panY=0;
   layout(true);
 }
@@ -774,25 +794,26 @@ function loadGraphData(data) {
   Object.keys(GRAPH.nodes).forEach(id => connCount[id] = 0);
   GRAPH.edges.forEach(([a, b]) => { connCount[a] = (connCount[a]||0)+1; connCount[b] = (connCount[b]||0)+1; });
 
-  // Pick best root: library with the most CVEs attached (most security-relevant view)
-  const SEV_SCORE = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
-  const libsWithCves = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'library');
-  libsWithCves.sort((a, b) => {
-    // Count CVE children and weight by severity
-    const score = id => (GRAPH.nodes[id].children || []).reduce((s, cid) => {
-      const sev = GRAPH.nodes[cid]?.severity || '';
-      return s + (SEV_SCORE[sev] || 0) + (GRAPH.nodes[cid]?.type === 'cve' ? 1 : 0);
-    }, 0);
-    return score(b) - score(a);
-  });
-
-  if (libsWithCves.length > 0) {
-    centerNodeId = libsWithCves[0];
+  // Root picker — prefer repo:root (repo-first view), fall back to most-CVE library
+  if (GRAPH.nodes['repo:root']) {
+    centerNodeId = 'repo:root';
   } else {
-    // Fall back to most connected file
-    const allFiles = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'file');
-    allFiles.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
-    centerNodeId = allFiles[0] || Object.keys(GRAPH.nodes)[0];
+    const SEV_SCORE = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+    const libsWithCves = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'library');
+    libsWithCves.sort((a, b) => {
+      const score = id => (GRAPH.nodes[id].children || []).reduce((s, cid) => {
+        const sev = GRAPH.nodes[cid]?.severity || '';
+        return s + (SEV_SCORE[sev] || 0) + (GRAPH.nodes[cid]?.type === 'cve' ? 1 : 0);
+      }, 0);
+      return score(b) - score(a);
+    });
+    if (libsWithCves.length > 0) {
+      centerNodeId = libsWithCves[0];
+    } else {
+      const allFiles = Object.keys(GRAPH.nodes).filter(id => GRAPH.nodes[id].type === 'file');
+      allFiles.sort((a,b) => (GRAPH.nodes[b].children||[]).length - (GRAPH.nodes[a].children||[]).length);
+      centerNodeId = allFiles[0] || Object.keys(GRAPH.nodes)[0];
+    }
   }
   history = [];
   attackPath = null;

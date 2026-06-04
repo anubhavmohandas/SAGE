@@ -74,6 +74,21 @@ def export_graph(G: nx.DiGraph, output_path: Optional[str] = None, repo_path: Op
     # Remove stdlib/noise libraries — not security relevant
     G = _filter_graph(G)
 
+    # Inject virtual repo root node — connects to all file nodes
+    # This makes the opening view show the full codebase, not just vulnerable libs
+    repo_label = _CURRENT_REPO_NAME or "repo"
+    root_id    = "repo:root"
+    file_nodes = [n for n in G.nodes() if n.startswith("file:")]
+    cve_count  = sum(1 for n in G.nodes() if n.startswith("cve:"))
+    G.add_node(root_id,
+        id=root_id, label=repo_label, type="repo",
+        color="#a78bfa",
+        info=f"Repository: {repo_label}\n{len(file_nodes)} files · {cve_count} CVEs",
+        children=file_nodes,
+    )
+    for fid in file_nodes:
+        G.add_edge(root_id, fid, label="CONTAINS")
+
     # Enrich nodes with display data
     _enrich_nodes(G)
 
@@ -187,6 +202,10 @@ STDLIB = {
     'email', 'mimetypes', 'uuid', 'hmac', 'secrets', 'decimal',
     'fractions', 'statistics', 'pprint', 'reprlib', 'operator',
     'builtins', '__future__', 'types', 'numbers', 'cmath',
+    'ast', 'dis', 'difflib', 'tokenize', 'token', 'keyword',
+    'tomllib', 'sqlite3', 'pickle', 'shelve', 'zipfile', 'tarfile',
+    'gzip', 'bz2', 'lzma', 'zlib', 'heapq', 'bisect', 'calendar',
+    'locale', 'gettext', 'codecs', 'unicodedata', 'linecache',
 }
 
 
@@ -199,10 +218,23 @@ def _filter_graph(G: nx.DiGraph) -> nx.DiGraph:
     import copy
     G2 = copy.deepcopy(G)
 
-    # Remove stdlib lib nodes
+    # Detect local packages — any lib: node whose name is a directory in the repo root
+    from pathlib import Path as _Path
+    repo_root = _Path(".").resolve()
+    local_pkgs = {d.name.lower() for d in repo_root.iterdir() if d.is_dir() and (d / "__init__.py").exists()}
+
+    # Import aliases that map to known packages (dotenv → python-dotenv, etc)
+    IMPORT_ALIASES = {'dotenv', 'tomli', 'google'}  # noisy low-signal libs
+
+    repo_name = _CURRENT_REPO_NAME.lower() if _CURRENT_REPO_NAME else ""
     to_remove = [
         n for n in G2.nodes()
-        if n.startswith("lib:") and n.replace("lib:", "") in STDLIB
+        if n.startswith("lib:") and (
+            n.replace("lib:", "") in STDLIB
+            or n.replace("lib:", "").lower() in local_pkgs
+            or n.replace("lib:", "") in IMPORT_ALIASES
+            or (repo_name and n.replace("lib:", "").lower().startswith(repo_name))
+        )
     ]
     G2.remove_nodes_from(to_remove)
 

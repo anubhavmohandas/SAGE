@@ -201,19 +201,35 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
                 applied = True
                 break
 
-    # Apply code patches — copy patched files into repo
+    # Apply code patches — use manifest.json for correct paths (filename reconstruction
+    # breaks for files nested >1 directory deep, e.g. sage/fetcher/filter.py)
+    import json as _json
     for patch in patch_result.get("code_patches", []):
         patch_dir = Path(patch["patch_dir"])
-        for patched_file in patch_dir.glob("patched_*.py"):
-            # Reconstruct original relative path from filename
-            # patched_cybertrace_network.py → cybertrace/network.py
-            original_name = patched_file.name.replace("patched_", "").replace("_", "/", 1)
-            # Try to find the file in repo
-            dst = repo / original_name
-            if dst.exists():
-                dst.write_text(patched_file.read_text())
-                print(f"[github] Applied code patch → {original_name}")
-                applied = True
+        manifest_path = patch_dir / "manifest.json"
+
+        if manifest_path.exists():
+            # Use manifest for exact original paths
+            manifest = _json.loads(manifest_path.read_text())
+            for entry in manifest:
+                patched_file = patch_dir / entry["patched_file"]
+                original_path = entry["original_path"]
+                dst = repo / original_path
+                if patched_file.exists() and dst.exists():
+                    dst.write_text(patched_file.read_text())
+                    print(f"[github] Applied code patch → {original_path}")
+                    applied = True
+                elif not dst.exists():
+                    print(f"[github] WARN: patch target not found → {original_path}")
+        else:
+            # Fallback: filename reconstruction (only works for single-level paths)
+            for patched_file in patch_dir.glob("patched_*.py"):
+                original_name = patched_file.name.replace("patched_", "").replace("_", "/", 1)
+                dst = repo / original_name
+                if dst.exists():
+                    dst.write_text(patched_file.read_text())
+                    print(f"[github] Applied code patch → {original_name}")
+                    applied = True
 
     return applied
 

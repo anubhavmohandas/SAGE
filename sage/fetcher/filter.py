@@ -269,15 +269,22 @@ def filter_relevant_cves(raw_cves: list[dict], stack: dict[str, str]) -> list[di
         print("[filter] Empty stack — no CVEs can match. Returning 0 results.")
         return []
 
+    # Skip CVEs not yet analysed by NVD — they have no CPE data to match against
+    ANALYSED = {"Analyzed", "Modified"}
+    analysed = [c for c in raw_cves if c.get("cve", {}).get("vulnStatus") in ANALYSED]
+    skipped = len(raw_cves) - len(analysed)
+    if skipped:
+        print(f"[filter] Skipping {skipped} unanalysed CVEs (no CPE data yet)")
+
     relevant = []
-    for cve_entry in raw_cves:
+    for cve_entry in analysed:
         match = _matches_stack(cve_entry, stack)
         if match:
             # Attach our match metadata to the CVE for downstream use
             cve_entry["sage_match"] = match
             relevant.append(cve_entry)
 
-    print(f"[filter] {len(relevant)}/{len(raw_cves)} CVEs matched your stack")
+    print(f"[filter] {len(relevant)}/{len(analysed)} analysed CVEs matched your stack")
 
     # Debug: show what package names NVD actually uses
     # so we can tune our matching if 0 results come back

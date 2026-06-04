@@ -24,7 +24,7 @@ from sage.fetcher.nvd    import fetch_cves_since, fetch_cve_by_id
 from sage.fetcher.filter import detect_stack, filter_relevant_cves
 from sage.fetcher.store  import init_db, save_cves, get_new_cves, get_summary
 from sage.synapse.parser import parse_repo
-from sage.synapse.mapper import attach_cves, get_blast_radius
+from sage.synapse.mapper import attach_cves, seed_libraries, get_blast_radius
 from sage.synapse.export import export_graph
 from sage.scanner.semgrep import scan_blast_radius, save_findings, print_findings_summary
 from sage.analyzer.llm import analyze_findings, save_confirmed, print_analysis_summary
@@ -94,14 +94,14 @@ def run_fetch(repo_path: str, days: int = 1):
             m = entry.get("sage_match", {})
             print(f"    [{m.get('severity', '?'):8s}] {m.get('cve_id', '?')} "
                   f"→ {m.get('package', '?')} {m.get('installed_version', '?')}")
-        print(f"\n  Next step: building Synapse knowledge graph...")
-        print(f"{'='*60}\n")
-
-        # Step 5 — Build Synapse knowledge graph
-        run_synapse(repo_path)
     else:
-        print(f"\n  No relevant CVEs found. Your stack looks clean for this period.")
-        print(f"{'='*60}\n")
+        print(f"\n  No relevant CVEs found. Stack looks clean for this period.")
+
+    # Always build the graph — it's a live map of the codebase.
+    # CVEs are overlaid on top if present; graph exists regardless.
+    print(f"\n  Building Synapse knowledge graph...")
+    print(f"{'='*60}\n")
+    run_synapse(repo_path)
 
 
 def run_synapse(repo_path: str):
@@ -111,13 +111,16 @@ def run_synapse(repo_path: str):
     """
     print_banner("SYNAPSE — Knowledge Graph Builder")
 
-    log("SAGE", "Synapse Step 1/3 — Parsing codebase...")
+    log("SAGE", "Synapse Step 1/4 — Parsing codebase...")
     G = parse_repo(repo_path)
 
-    log("SAGE", "Synapse Step 2/3 — Attaching CVE nodes...")
+    log("SAGE", "Synapse Step 2/4 — Seeding library nodes from requirements...")
+    G = seed_libraries(G, repo_path)
+
+    log("SAGE", "Synapse Step 3/4 — Attaching CVE nodes...")
     G = attach_cves(G)
 
-    log("SAGE", "Synapse Step 3/3 — Exporting graph...")
+    log("SAGE", "Synapse Step 4/4 — Exporting graph...")
     out_path = export_graph(G, repo_path=repo_path)
 
     # Blast radius table

@@ -30,8 +30,32 @@ RESPONSES_DIR = Path("data/responses")
 
 # ─── Main analysis function ───────────────────────────────────────────────────
 
+# Severity → Claude model mapping. CRITICAL gets Opus for best analysis quality;
+# HIGH/MEDIUM/LOW use Sonnet (5x cheaper, fast enough for triage).
+SEVERITY_MODEL = {
+    "CRITICAL": "claude-opus-4-6",
+    "HIGH":     "claude-sonnet-4-6",
+    "MEDIUM":   "claude-sonnet-4-6",
+    "LOW":      "claude-sonnet-4-6",
+    "UNKNOWN":  "claude-sonnet-4-6",
+}
+
+
+def _model_for_severity(severity: str) -> str:
+    return SEVERITY_MODEL.get(severity.upper(), "claude-sonnet-4-6")
+
+
 def _ask_mode() -> str:
-    """Ask user whether to use API or manual prompt mode. Returns 'api' or 'manual'."""
+    """
+    Determine analysis mode. In non-interactive environments (CI, cron, scheduled tasks)
+    defaults to API mode automatically. Only prompts when running in a real terminal.
+    """
+    import sys
+    # Non-interactive: stdin is not a TTY (CI, cron, pipe) — default to API
+    if not sys.stdin.isatty():
+        print("[analyzer] Non-interactive environment detected — using API mode")
+        return "api"
+
     print("\n[analyzer] ── Analysis Mode ──")
     print("  Do you have a Gemini or Anthropic API key available for analysis?")
     print("  [y] Yes — use API  |  [n] No — export prompts for manual review")
@@ -46,10 +70,12 @@ def _ask_mode() -> str:
 
 def analyze_findings(findings: list[dict], G, repo_path: str) -> list[dict]:
     """
-    Ask user whether to use API or manual prompt mode, then run accordingly.
+    Determine analysis mode, then run accordingly.
 
     API mode:   calls Gemini 2.0 Flash (with Anthropic fallback) per CVE.
+                Model is severity-gated: CRITICAL → Opus, others → Sonnet.
     Manual mode: exports prompt files → you paste into Claude chat → drop JSON responses.
+    Non-interactive (CI/cron): always uses API mode without prompting.
     """
     mode = _ask_mode()
     if mode == "api":
@@ -180,7 +206,7 @@ def _analyze_single_cve_api(cve_id: str, findings: list[dict], G, repo_path: str
 
     prompt = _build_prompt(cve_id, severity, package, cwe, affected_r, function_codes, findings)
 
-    response = _call_llm_api(prompt, cve_id, cfg)
+    response = _call_llm_api(prompt, cve_id, cfg, severity)
     if not response:
         return None
 
@@ -198,6 +224,8 @@ def _analyze_single_cve_api(cve_id: str, findings: list[dict], G, repo_path: str
             "attack_vector":      response.get("attack_vector", ""),
             "recommendation":     response.get("recommendation", ""),
             "semgrep_findings":   findings,
+            # Pass function_codes to patcher so it has actual code to patch
+            "function_codes":     function_codes,
         }
 
     print(f"[analyzer] {cve_id} → NOT exploitable "
@@ -205,18 +233,18 @@ def _analyze_single_cve_api(cve_id: str, findings: list[dict], G, repo_path: str
     return None
 
 
-def _call_llm_api(prompt: str, cve_id: str, cfg) -> Optional[dict]:
-    """Gemini primary, Anthropic fallback."""
+def _call_llm_api(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Optional[dict]:
+    """Gemini primary, Anthropic fallback. Claude model is severity-gated."""
     if cfg.GEMINI_API_KEY:
         result = _call_gemini(prompt, cve_id, cfg)
         if result is not None:
             return result
         if cfg.ANTHROPIC_API_KEY:
             print(f"[analyzer] Falling back to Claude for {cve_id}")
-            return _call_claude(prompt, cve_id, cfg)
+            return _call_claude(prompt, cve_id, cfg, severity)
         return None
     elif cfg.ANTHROPIC_API_KEY:
-        return _call_claude(prompt, cve_id, cfg)
+        return _call_claude(prompt, cve_id, cfg, severity)
     print(f"[analyzer] No API key available for {cve_id}")
     return None
 
@@ -263,19 +291,21 @@ def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
     return None
 
 
-def _call_claude(prompt: str, cve_id: str, cfg) -> Optional[dict]:
+def _call_claude(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Optional[dict]:
+    """Call Claude with severity-gated model: CRITICAL → Opus, others → Sonnet."""
+    model = _model_for_severity(severity)
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=model,
             max_tokens=1024,
             temperature=0.2,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = _strip_fences(response.content[0].text.strip())
         result = json.loads(raw)
-        print(f"[analyzer] {cve_id} (Claude) → vulnerable={result.get('vulnerable')} "
+        print(f"[analyzer] {cve_id} (Claude/{model.split('-')[1]}) → vulnerable={result.get('vulnerable')} "
               f"confidence={result.get('confidence', 0):.2f}")
         return result
     except Exception as e:

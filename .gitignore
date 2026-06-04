@@ -50,7 +50,6 @@ Thumbs.db
 *.swp
 *.swo
 
-
 # Files to be ignored
 SAGE_Project_Brief.docx
-*synapse.html
+synapse.html

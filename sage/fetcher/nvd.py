@@ -114,10 +114,12 @@ def _fetch_window(start: datetime, end: datetime) -> list[dict]:
 
     while True:
         params = {
-            "pubStartDate":   pub_start,
-            "pubEndDate":     pub_end,
-            "startIndex":     start_index,
-            "resultsPerPage": results_per_page,
+            # Use lastModDate so we catch CVEs that were recently analysed,
+            # not just recently published — NVD only adds CPE data after analysis.
+            "lastModStartDate": pub_start,
+            "lastModEndDate":   pub_end,
+            "startIndex":       start_index,
+            "resultsPerPage":   results_per_page,
         }
 
         data = _make_request(params)

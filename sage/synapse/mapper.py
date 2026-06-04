@@ -36,6 +36,29 @@ SEVERITY_COLOR = {
 }
 
 
+def seed_libraries(G: nx.DiGraph, repo_path: str) -> nx.DiGraph:
+    """
+    Seed the graph with library nodes from requirements.txt BEFORE CVE attachment.
+
+    Ensures every declared dependency exists as a graph node even if AST parsing
+    missed it (dynamic imports, aliased imports, etc). Without this, attach_cves
+    silently drops CVEs for packages not explicitly seen in source.
+    """
+    from sage.fetcher.filter import detect_stack
+    stack = detect_stack(repo_path)
+    added = 0
+    for pkg in stack:
+        lib_id        = f"lib:{pkg}"
+        lib_id_hyphen = f"lib:{pkg.replace('_', '-')}"
+        if not G.has_node(lib_id) and not G.has_node(lib_id_hyphen):
+            G.add_node(lib_id, id=lib_id, label=pkg, type="library",
+                       color="#e8960a", info=f"Library: {pkg}", children=[])
+            added += 1
+    if added:
+        print(f"[mapper] Seeded {added} library nodes from requirements.txt")
+    return G
+
+
 def attach_cves(G: nx.DiGraph) -> nx.DiGraph:
     """
     Load CVEs from the database and attach them as nodes to the graph.
