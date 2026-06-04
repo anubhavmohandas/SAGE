@@ -422,6 +422,15 @@ def _names_match(cpe_name: str, pkg_name: str) -> bool:
         "python_dotenv":  {"python_dotenv", "python-dotenv", "dotenv"},
         "python_whois":   {"python_whois", "python-whois"},
         "phonenumbers":   {"phonenumbers", "googlei18n_libphonenumber"},
+        "anthropic":      {"anthropic", "anthropic_sdk", "anthropic-sdk",
+                           "anthropic_python_sdk", "anthropic_inc_anthropic"},
+        "pygithub":       {"pygithub", "pygithub_pygithub", "github"},
+        "networkx":       {"networkx", "networkx_networkx"},
+        "semgrep":        {"semgrep", "semgrep_semgrep", "returntocorp_semgrep",
+                           "checkmarx_semgrep"},
+        "jsonschema":     {"jsonschema", "python_jsonschema", "python-jsonschema"},
+        "packaging":      {"packaging", "pypa_packaging"},
+        "tree_sitter":    {"tree_sitter", "tree-sitter", "tree_sitter_tree_sitter"},
     }
 
     # Normalize both
