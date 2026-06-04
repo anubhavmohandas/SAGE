@@ -126,6 +126,9 @@ def _parse_requirements_txt(path: Path) -> dict[str, str]:
             if not line:
                 continue
 
+            # Strip extras syntax: aiohttp[speedups]==3.13.2 → aiohttp==3.13.2
+            line = re.sub(r'\[[^\]]*\]', '', line)
+
             # Parse package name and version spec
             # Splits on ==, >=, <=, !=, ~=, >
             match = re.match(r"^([A-Za-z0-9_\-\.]+)\s*([=><!~].+)?$", line)

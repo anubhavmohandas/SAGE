@@ -131,11 +131,13 @@ def _parse_file(G: nx.DiGraph, file_path: Path, repo_root: Path, parser):
     root = tree.root_node
 
     # Walk the AST
-    _extract_imports(G, root, source, file_id)
-    _extract_functions(G, root, source, file_id, rel_path)
+    # import_aliases maps imported names → lib_id, e.g. {"load_dotenv": "lib:dotenv"}
+    # This lets _extract_calls resolve `from X import Y; Y()` patterns.
+    import_aliases = _extract_imports(G, root, source, file_id)
+    _extract_functions(G, root, source, file_id, rel_path, import_aliases)
 
 
-def _extract_imports(G: nx.DiGraph, root, source: bytes, file_id: str):
+def _extract_imports(G: nx.DiGraph, root, source: bytes, file_id: str) -> dict:
     """
     Find all import statements and add library nodes + IMPORTS edges.
 
@@ -144,10 +146,16 @@ def _extract_imports(G: nx.DiGraph, root, source: bytes, file_id: str):
       import aiohttp as ah
       from aiohttp import ClientSession
       from aiohttp.client import ClientSession
+
+    Returns:
+      import_aliases: dict mapping imported names → lib_id
+      e.g. {"load_dotenv": "lib:dotenv", "ClientSession": "lib:aiohttp"}
+      Used by _extract_calls to resolve `from X import Y; Y()` patterns.
     """
+    import_aliases = {}  # {imported_symbol: lib_id}
+
     def walk(node):
         if node.type in ("import_statement", "import_from_statement"):
-            # Extract the top-level module name
             module_name = _get_import_module(node, source)
             if module_name and not module_name.startswith("."):
                 lib_id = f"lib:{module_name}"
@@ -156,21 +164,38 @@ def _extract_imports(G: nx.DiGraph, root, source: bytes, file_id: str):
                 if not G.has_edge(file_id, lib_id):
                     G.add_edge(file_id, lib_id, label="IMPORTS")
 
+                # Build alias map for `from X import Y [as Z]` imports
+                text = source[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")
+                if text.startswith("from ") and " import " in text:
+                    imports_part = text.split(" import ", 1)[1].strip()
+                    # Handle parenthesized imports and strip comments
+                    imports_part = imports_part.strip("()\\ \n")
+                    for item in imports_part.split(","):
+                        item = item.strip().split("#")[0].strip()
+                        if " as " in item:
+                            _, alias = item.split(" as ", 1)
+                            import_aliases[alias.strip()] = lib_id
+                        elif item:
+                            import_aliases[item.strip()] = lib_id
+
         for child in node.children:
             walk(child)
 
     walk(root)
+    return import_aliases
 
 
 def _extract_functions(G: nx.DiGraph, root, source: bytes,
-                        file_id: str, rel_path: str):
+                        file_id: str, rel_path: str, import_aliases: dict = None):
     """
     Find all function/method definitions and add function nodes.
     Also detects library calls inside function bodies.
     """
+    if import_aliases is None:
+        import_aliases = {}
+
     def walk(node, parent_func=None):
         if node.type in ("function_definition", "decorated_definition"):
-            # Get the actual function_definition if decorated
             func_node = node
             if node.type == "decorated_definition":
                 for child in node.children:
@@ -185,13 +210,9 @@ def _extract_functions(G: nx.DiGraph, root, source: bytes,
                     id=func_id, label=f"{func_name}()", type="function",
                     file=rel_path, name=func_name, line=func_node.start_point[0]+1
                 )
-                # File CONTAINS function
                 G.add_edge(file_id, func_id, label="CONTAINS")
+                _extract_calls(G, func_node, source, func_id, import_aliases)
 
-                # Detect library calls inside this function
-                _extract_calls(G, func_node, source, func_id)
-
-                # Recurse into function body (nested functions)
                 for child in func_node.children:
                     walk(child, func_id)
             return
@@ -202,30 +223,40 @@ def _extract_functions(G: nx.DiGraph, root, source: bytes,
     walk(root)
 
 
-def _extract_calls(G: nx.DiGraph, func_node, source: bytes, func_id: str):
+def _extract_calls(G: nx.DiGraph, func_node, source: bytes, func_id: str,
+                   import_aliases: dict = None):
     """
-    Find library calls inside a function body.
-    Looks for patterns like: aiohttp.ClientSession(), requests.get()
+    Find library calls inside a function body. Detects two patterns:
 
-    Teaching note:
-        This is "best effort" — statically knowing EXACTLY what
-        a function calls is hard (dynamic dispatch, aliases, etc).
-        We catch the obvious cases: module.something() calls.
+    1. module.method()  — e.g. requests.get(), aiohttp.ClientSession()
+    2. imported_name()  — e.g. load_dotenv(), from dotenv import load_dotenv
+
+    Pattern 2 requires import_aliases: {imported_name → lib_id}.
     """
+    if import_aliases is None:
+        import_aliases = {}
+
     def walk(node):
         if node.type == "call":
-            # Look for attribute access: module.method()
             func_part = node.child_by_field_name("function")
-            if func_part and func_part.type == "attribute":
-                obj = func_part.child_by_field_name("object")
-                if obj:
-                    obj_name = source[obj.start_byte:obj.end_byte].decode("utf-8", errors="ignore")
-                    # If this looks like a library name (not 'self', 'cls', etc)
-                    if obj_name not in ("self", "cls", "super") and "." not in obj_name:
-                        lib_id = f"lib:{obj_name}"
-                        if G.has_node(lib_id):
-                            if not G.has_edge(func_id, lib_id):
+            if func_part:
+                if func_part.type == "attribute":
+                    # Pattern 1: module.method()
+                    obj = func_part.child_by_field_name("object")
+                    if obj:
+                        obj_name = source[obj.start_byte:obj.end_byte].decode("utf-8", errors="ignore")
+                        if obj_name not in ("self", "cls", "super") and "." not in obj_name:
+                            lib_id = f"lib:{obj_name}"
+                            if G.has_node(lib_id) and not G.has_edge(func_id, lib_id):
                                 G.add_edge(func_id, lib_id, label="USES")
+
+                elif func_part.type == "identifier":
+                    # Pattern 2: directly called imported name, e.g. load_dotenv()
+                    name = source[func_part.start_byte:func_part.end_byte].decode("utf-8", errors="ignore")
+                    if name in import_aliases:
+                        lib_id = import_aliases[name]
+                        if G.has_node(lib_id) and not G.has_edge(func_id, lib_id):
+                            G.add_edge(func_id, lib_id, label="USES")
 
         for child in node.children:
             walk(child)
