@@ -22,6 +22,7 @@ from sage.config import cfg
 from sage.utils.colors import console, print_banner, log, log_success, log_fail, log_warn, print_pipeline_result
 from sage.fetcher.nvd    import fetch_cves_since, fetch_cve_by_id
 from sage.fetcher.filter import detect_stack, filter_relevant_cves
+from sage.fetcher.npm    import fetch_npm_advisories
 from sage.fetcher.store  import init_db, save_cves, get_new_cves, get_summary
 from sage.synapse.parser import parse_repo
 from sage.synapse.mapper import attach_cves, seed_libraries, get_blast_radius
@@ -64,17 +65,29 @@ def run_fetch(repo_path: str, days: int = 1):
         print("[SAGE] Tip: SAGE works best on repos with requirements.txt or package.json")
         return
 
-    # Step 2 — Fetch CVEs from NVD
-    print(f"\n[SAGE] Step 2/4 — Fetching CVEs from NVD (last {days} day(s))...")
-    raw_cves = fetch_cves_since(days=days)
+    # Detect if this is a Node.js/JS repo
+    from pathlib import Path as _Path
+    is_js_repo = (_Path(repo_path) / "package.json").exists()
 
-    if not raw_cves:
-        print("[SAGE] No CVEs fetched. Check your internet connection or NVD API key.")
-        return
+    # Step 2 — Fetch CVEs (NVD for Python, GHSA/npm-audit for JS)
+    if is_js_repo:
+        print(f"\n[SAGE] Step 2/4 — Fetching npm advisories (last {days} day(s))...")
+        # JS repos: use GHSA + npm audit (no NVD key needed for npm packages)
+        js_stack = {k: v for k, v in stack.items()}
+        relevant = fetch_npm_advisories(js_stack, days=days)
+        raw_cves = relevant  # already filtered by ecosystem
+        print(f"[SAGE] npm advisory fetch: {len(relevant)} advisories")
+    else:
+        print(f"\n[SAGE] Step 2/4 — Fetching CVEs from NVD (last {days} day(s))...")
+        raw_cves = fetch_cves_since(days=days)
 
-    # Step 3 — Filter to relevant CVEs
-    print(f"\n[SAGE] Step 3/4 — Filtering {len(raw_cves)} CVEs against your stack...")
-    relevant = filter_relevant_cves(raw_cves, stack)
+        if not raw_cves:
+            print("[SAGE] No CVEs fetched. Check your internet connection or NVD API key.")
+            return
+
+        # Step 3 — Filter to relevant CVEs
+        print(f"\n[SAGE] Step 3/4 — Filtering {len(raw_cves)} CVEs against your stack...")
+        relevant = filter_relevant_cves(raw_cves, stack)
 
     # Step 4 — Save to DB
     print(f"\n[SAGE] Step 4/4 — Saving to database...")
@@ -84,7 +97,8 @@ def run_fetch(repo_path: str, days: int = 1):
     print(f"\n{'='*60}")
     print(f"  SAGE Fetch Complete")
     print(f"{'='*60}")
-    print(f"  CVEs fetched from NVD:     {len(raw_cves)}")
+    source = "npm advisories" if is_js_repo else "NVD"
+    print(f"  CVEs fetched from {source}:  {len(raw_cves)}")
     print(f"  Relevant to your stack:    {len(relevant)}")
     print(f"  Saved to DB:               data/sage.db")
 
@@ -250,6 +264,8 @@ def main():
     parser.add_argument("--cve",     type=str, help="Look up a specific CVE by ID")
     parser.add_argument("--status",  action="store_true", help="Show pipeline status")
     parser.add_argument("--synapse", type=str, help="Build Synapse graph for a repo (skip CVE fetch)")
+    parser.add_argument("--digest",  type=str, nargs="+", metavar="REPO",
+                        help="Morning digest: run full pipeline non-interactively for one or more repos")
 
     args = parser.parse_args()
 
@@ -262,6 +278,9 @@ def main():
         run_single_cve(args.cve)
     elif args.synapse:
         run_synapse(args.synapse)
+    elif args.digest:
+        from sage.digest import run_digest
+        sys.exit(run_digest(args.digest, days=args.days))
     elif args.repo:
         run_fetch(args.repo, days=args.days)
     else:
