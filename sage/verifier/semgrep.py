@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.scanner.semgrep import CWE_TO_RULES
+from sage.utils.colors import cprint
 
 
 def _patches_dir() -> Path:
@@ -80,7 +81,7 @@ def run_verifier(patch_result: dict, confirmed: list[dict], repo_path: str) -> d
 
     # A — Verify code patches
     if code_patches:
-        print(f"[verifier] Verifying {len(code_patches)} code patch(es)...")
+        cprint(f"[verifier] Verifying {len(code_patches)} code patch(es)...")
         for patch in code_patches:
             cve_id    = patch["cve_id"]
             patch_dir = Path(patch["patch_dir"])
@@ -97,21 +98,21 @@ def run_verifier(patch_result: dict, confirmed: list[dict], repo_path: str) -> d
                 results["new_issues"].extend(result.get("findings", []))
 
             status = "✓ CLEAN" if result["passed"] else "✗ ISSUES FOUND"
-            print(f"[verifier] {cve_id} patch → {status}")
+            cprint(f"[verifier] {cve_id} patch → {status}")
     else:
-        print("[verifier] No code patches to verify")
+        cprint("[verifier] No code patches to verify")
 
     # B — Verify dep bump
     if dep_bump:
-        print(f"[verifier] Verifying dep bump...")
+        cprint(f"[verifier] Verifying dep bump...")
         dep_result = _verify_dep_bump(dep_bump, repo_path)
         results["dep_result"] = dep_result
         if not dep_result["passed"]:
             results["passed"] = False
         status = "✓ VALID" if dep_result["passed"] else "✗ INVALID"
-        print(f"[verifier] Dep bump → {status}")
+        cprint(f"[verifier] Dep bump → {status}")
     else:
-        print("[verifier] No dep bump to verify")
+        cprint("[verifier] No dep bump to verify")
 
     return results
 
@@ -187,7 +188,7 @@ def _run_semgrep_on_file(file_path: str, rules: list[str]) -> list[dict]:
         return findings
 
     except subprocess.TimeoutExpired:
-        print(f"[verifier] Semgrep timeout on {file_path}")
+        cprint(f"[verifier] Semgrep timeout on {file_path}")
         return []
     except (json.JSONDecodeError, Exception):
         return []
@@ -250,7 +251,7 @@ def _quick_semgrep_check(repo_path: str) -> bool:
         data = json.loads(result.stdout or "{}")
         findings = data.get("results", [])
         if findings:
-            print(f"[verifier] Semgrep found {len(findings)} issue(s) in repo (pre-existing)")
+            cprint(f"[verifier] Semgrep found {len(findings)} issue(s) in repo (pre-existing)")
         # Pre-existing findings don't block — we only care about NEW ones introduced by patch
         return True
     except Exception:
@@ -260,27 +261,27 @@ def _quick_semgrep_check(repo_path: str) -> bool:
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
 def print_verifier_summary(results: dict):
-    print(f"\n[verifier] ── Verification Results ──")
+    cprint(f"\n[verifier] ── Verification Results ──")
 
     for r in results.get("code_results", []):
         status = "✓ CLEAN" if r["passed"] else "✗ ISSUES"
-        print(f"  {r['cve_id']} patch:  {status} — {r['reason']}")
+        cprint(f"  {r['cve_id']} patch:  {status} — {r['reason']}")
 
     dep = results.get("dep_result")
     if dep:
         status = "✓ VALID" if dep["passed"] else "✗ INVALID"
-        print(f"  Dep bump:          {status} — {dep['reason']}")
+        cprint(f"  Dep bump:          {status} — {dep['reason']}")
 
     new_issues = results.get("new_issues", [])
     if new_issues:
-        print(f"\n  New issues introduced by patch ({len(new_issues)}):")
+        cprint(f"\n  New issues introduced by patch ({len(new_issues)}):")
         for issue in new_issues[:5]:
-            print(f"    [{issue.get('severity', '?')}] {issue.get('rule_id', '')} "
+            cprint(f"    [{issue.get('severity', '?')}] {issue.get('rule_id', '')} "
                   f"@ {issue.get('file', '')}:{issue.get('line', '')}")
 
     overall = "✓ PASSED — safe to raise PR" if results["passed"] else "✗ FAILED — fix issues before PR"
-    print(f"\n  Overall: {overall}")
-    print(f"  Next: github PR")
+    cprint(f"\n  Overall: {overall}")
+    cprint(f"  Next: github PR")
 
 
 def save_verifier_results(results: dict, output_path: str = ""):
@@ -289,4 +290,4 @@ def save_verifier_results(results: dict, output_path: str = ""):
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"[verifier] Results saved → {p}")
+    cprint(f"[verifier] Results saved → {p}")

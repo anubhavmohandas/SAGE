@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
+from sage.utils.colors import cprint
 
 
 GHSA_GRAPHQL = "https://api.github.com/graphql"
@@ -121,10 +122,10 @@ def _fetch_ghsa(
                 timeout=20,
             )
             if resp.status_code == 401:
-                print("[npm] GHSA: unauthenticated rate limit — set GITHUB_TOKEN for higher limits")
+                cprint("[npm] GHSA: unauthenticated rate limit — set GITHUB_TOKEN for higher limits")
                 break
             if resp.status_code != 200:
-                print(f"[npm] GHSA error {resp.status_code}")
+                cprint(f"[npm] GHSA error {resp.status_code}")
                 break
 
             data = resp.json().get("data", {})
@@ -147,7 +148,7 @@ def _fetch_ghsa(
             time.sleep(0.2)  # be polite to GHSA
 
         except Exception as e:
-            print(f"[npm] GHSA fetch error: {e}")
+            cprint(f"[npm] GHSA fetch error: {e}")
 
     return results
 
@@ -272,7 +273,7 @@ def _fetch_npm_audit(packages: dict[str, str]) -> list[dict]:
             timeout=20,
         )
         if resp.status_code != 200:
-            print(f"[npm] npm audit API error {resp.status_code}")
+            cprint(f"[npm] npm audit API error {resp.status_code}")
             return []
 
         data = resp.json()
@@ -310,5 +311,5 @@ def _fetch_npm_audit(packages: dict[str, str]) -> list[dict]:
         return results
 
     except Exception as e:
-        print(f"[npm] npm audit fetch error: {e}")
+        cprint(f"[npm] npm audit fetch error: {e}")
         return []

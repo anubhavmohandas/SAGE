@@ -148,3 +148,56 @@ def print_pipeline_result(passed: bool, msg: str):
     style = "success" if passed else "fail"
     icon  = "✓" if passed else "✗"
     console.print(f"\n  [{style}]{icon} {msg}[/{style}]")
+
+
+# ─── Smart color print — drop-in replacement for print() ─────────────────────
+# Import this as `from sage.utils.colors import cprint` and use instead of print().
+# Automatically applies color based on message content — no code changes needed.
+
+import re as _re
+
+_ERROR_PAT   = _re.compile(r'error|failed|fail\b|✗|traceback|exception|invalid|not found|cannot|rejected', _re.I)
+_SUCCESS_PAT = _re.compile(r'✓|success|passed|created|written|saved|migrated|complete|ok\b|done\b|loaded|applied|bumping|generated', _re.I)
+_WARN_PAT    = _re.compile(r'warning|warn\b|skipping|quota|429|fallback|clamped|deprecated|pre-existing', _re.I)
+_INFO_PAT    = _re.compile(r'^\[(?:store|fetcher|filter|mapper|synapse|scanner|analyzer|patcher|tests|verifier|github|reach|export|sage)\]', _re.I)
+_CVE_PAT     = _re.compile(r'CVE-\d{4}-\d+')
+_CRITICAL_PAT = _re.compile(r'CRITICAL|critical')
+_HIGH_PAT    = _re.compile(r'\bHIGH\b')
+_MEDIUM_PAT  = _re.compile(r'\bMEDIUM\b')
+
+def cprint(*args, **kwargs):
+    """
+    Drop-in replacement for print() that auto-colors output based on content.
+    Severity keywords, errors, successes — all get appropriate colors.
+    Falls back to plain print if rich is unavailable.
+    """
+    msg = " ".join(str(a) for a in args)
+
+    try:
+        # Pick style based on content
+        if _ERROR_PAT.search(msg):
+            style = "bold red"
+        elif _SUCCESS_PAT.search(msg):
+            style = "bold green"
+        elif _WARN_PAT.search(msg):
+            style = "yellow"
+        elif _CRITICAL_PAT.search(msg):
+            style = "bold red"
+        elif _HIGH_PAT.search(msg):
+            style = "bold yellow"
+        elif _MEDIUM_PAT.search(msg):
+            style = "yellow"
+        elif _INFO_PAT.match(msg):
+            style = "dim white"
+        else:
+            style = ""
+
+        # Escape rich markup chars in the message
+        safe = msg.replace("[", "\\[")
+
+        if style:
+            console.print(f"[{style}]{safe}[/{style}]", **{k:v for k,v in kwargs.items() if k in ('end','sep')})
+        else:
+            console.print(safe, **{k:v for k,v in kwargs.items() if k in ('end','sep')})
+    except Exception:
+        print(*args, **kwargs)

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.synapse.mapper import get_blast_radius
+from sage.utils.colors import cprint
 
 
 # CWE → Semgrep rule pack mapping
@@ -188,10 +189,10 @@ def scan_blast_radius(G, repo_path: str) -> list[dict]:
     # Get all CVE nodes from graph
     cve_nodes = [n for n in G.nodes() if n.startswith("cve:")]
     if not cve_nodes:
-        print("[scanner] No CVE nodes in graph. Run fetcher + mapper first.")
+        cprint("[scanner] No CVE nodes in graph. Run fetcher + mapper first.")
         return []
 
-    print(f"[scanner] Scanning blast radius for {len(cve_nodes)} CVEs...")
+    cprint(f"[scanner] Scanning blast radius for {len(cve_nodes)} CVEs...")
 
     for cve_node in cve_nodes:
         cve_id = cve_node.replace("cve:", "")
@@ -217,7 +218,7 @@ def scan_blast_radius(G, repo_path: str) -> list[dict]:
             if r not in rules:
                 rules.append(r)
 
-        print(f"[scanner] {cve_id} ({cwe or 'no CWE'}) → "
+        cprint(f"[scanner] {cve_id} ({cwe or 'no CWE'}) → "
               f"{len(exposed_files)} files, lib={affected_lib} → rules: {rules}")
 
         # Run Semgrep on each exposed file
@@ -229,7 +230,7 @@ def scan_blast_radius(G, repo_path: str) -> list[dict]:
             findings = _run_semgrep(abs_file, rules, cve_id)
             all_findings.extend(findings)
 
-    print(f"[scanner] Total findings: {len(all_findings)}")
+    cprint(f"[scanner] Total findings: {len(all_findings)}")
     return all_findings
 
 
@@ -268,7 +269,7 @@ def _run_semgrep(file_path: str, rules: list[str], cve_id: str) -> list[dict]:
 
             if result.returncode not in (0, 1):
                 # 0 = no findings, 1 = findings found, anything else = error
-                print(f"[scanner] Semgrep error on {file_path}: {result.stderr[:200]}")
+                cprint(f"[scanner] Semgrep error on {file_path}: {result.stderr[:200]}")
                 continue
 
             if not result.stdout.strip():
@@ -279,14 +280,14 @@ def _run_semgrep(file_path: str, rules: list[str], cve_id: str) -> list[dict]:
                 findings.append(_parse_finding(match, cve_id, rule))
 
         except subprocess.TimeoutExpired:
-            print(f"[scanner] Semgrep timed out on {file_path}")
+            cprint(f"[scanner] Semgrep timed out on {file_path}")
         except json.JSONDecodeError:
-            print(f"[scanner] Could not parse Semgrep output for {file_path}")
+            cprint(f"[scanner] Could not parse Semgrep output for {file_path}")
         except FileNotFoundError:
-            print("[scanner] Semgrep not found. Install: pip3 install semgrep")
+            cprint("[scanner] Semgrep not found. Install: pip3 install semgrep")
             break
         except Exception as e:
-            print(f"[scanner] Unexpected error: {e}")
+            cprint(f"[scanner] Unexpected error: {e}")
 
     return findings
 
@@ -341,16 +342,16 @@ def save_findings(findings: list[dict], output_path: str = ""):
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w") as f:
         json.dump(findings, f, indent=2)
-    print(f"[scanner] Findings saved → {p}")
+    cprint(f"[scanner] Findings saved → {p}")
 
 
 def print_findings_summary(findings: list[dict]):
     """Print a human-readable summary of findings."""
     if not findings:
-        print("[scanner] No findings. Code looks clean for these CVE patterns.")
+        cprint("[scanner] No findings. Code looks clean for these CVE patterns.")
         return
 
-    print(f"\n[scanner] ── Findings Summary ──")
+    cprint(f"\n[scanner] ── Findings Summary ──")
     by_severity = {}
     for f in findings:
         sev = f.get("severity", "UNKNOWN")
@@ -358,11 +359,11 @@ def print_findings_summary(findings: list[dict]):
 
     for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "WARNING", "INFO"]:
         if sev in by_severity:
-            print(f"  {sev:10s} {by_severity[sev]}")
+            cprint(f"  {sev:10s} {by_severity[sev]}")
 
-    print(f"\n  Top findings:")
+    cprint(f"\n  Top findings:")
     for finding in findings[:5]:
-        print(f"  [{finding['severity']:8s}] {finding['file']}:{finding['line']}")
-        print(f"             {finding['message'][:80]}")
-        print(f"             CVE: {finding['cve_id']}")
-        print()
+        cprint(f"  [{finding['severity']:8s}] {finding['file']}:{finding['line']}")
+        cprint(f"             {finding['message'][:80]}")
+        cprint(f"             CVE: {finding['cve_id']}")
+        cprint()

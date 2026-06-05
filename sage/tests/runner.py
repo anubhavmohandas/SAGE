@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.config import cfg
+from sage.utils.colors import cprint
 
 
 def _tests_dir() -> Path:
@@ -63,7 +64,7 @@ def run_tests(patch_result: dict, confirmed: list[dict], repo_path: str) -> dict
     """
     _tests_dir().mkdir(parents=True, exist_ok=True)
 
-    print(f"[tests] Running test suite for {repo_path}")
+    cprint(f"[tests] Running test suite for {repo_path}")
 
     results = {
         "existing_tests": None,
@@ -80,7 +81,7 @@ def run_tests(patch_result: dict, confirmed: list[dict], repo_path: str) -> dict
     current_failures  = existing.get("failures", 0)
     new_failures      = max(0, current_failures - baseline_failures)
     if not existing.get("passed") and new_failures == 0:
-        print(f"[tests] {current_failures} pre-existing failure(s) — not caused by SAGE patch")
+        cprint(f"[tests] {current_failures} pre-existing failure(s) — not caused by SAGE patch")
         existing["passed"] = True  # override — pre-existing failures don't block PR
 
     # Step 2 — Generate + run security tests for confirmed vulns
@@ -88,7 +89,7 @@ def run_tests(patch_result: dict, confirmed: list[dict], repo_path: str) -> dict
         sec = _generate_and_run_security_tests(confirmed, patch_result, repo_path)
         results["security_tests"] = sec
     else:
-        print("[tests] No confirmed vulnerabilities — skipping security test generation")
+        cprint("[tests] No confirmed vulnerabilities — skipping security test generation")
         results["security_tests"] = {"passed": True, "output": "No confirmed CVEs", "files": []}
 
     # Overall gate
@@ -115,19 +116,19 @@ def _run_existing_tests(repo_path: str) -> dict:
         test_locations.extend(matches)
 
     if not test_locations:
-        print("[tests] No existing tests found in repo — skipping")
+        cprint("[tests] No existing tests found in repo — skipping")
         return {
             "passed": True,  # No tests = not a failure
             "output": "No test files found in repo",
             "count":  0,
         }
 
-    print(f"[tests] Found test locations: {[str(t) for t in test_locations[:3]]}")
+    cprint(f"[tests] Found test locations: {[str(t) for t in test_locations[:3]]}")
 
     # Install repo's deps if requirements.txt exists
     _install_repo_deps(repo_path)
 
-    print(f"[tests] Running existing tests...")
+    cprint(f"[tests] Running existing tests...")
 
     try:
         result = subprocess.run(
@@ -141,18 +142,18 @@ def _run_existing_tests(repo_path: str) -> dict:
 
         # If pytest itself isn't installed, fall back to unittest
         if "No module named pytest" in output:
-            print("[tests] pytest not installed — trying unittest")
+            cprint("[tests] pytest not installed — trying unittest")
             return _run_unittest(repo_path)
 
         passed   = result.returncode == 0
         count    = _parse_pytest_count(output)
         failures = _count_failures(output)
         status   = "PASSED" if passed else "FAILED"
-        print(f"[tests] Existing tests: {status} ({count} passed, {failures} failed)")
+        cprint(f"[tests] Existing tests: {status} ({count} passed, {failures} failed)")
         if not passed:
             lines = output.strip().splitlines()
             for line in lines[-20:]:
-                print(f"[tests]   {line}")
+                cprint(f"[tests]   {line}")
 
         # Load stored baseline (from a previous clean run), or store this as baseline
         baseline_failures = _load_or_store_baseline(repo_path, failures)
@@ -166,16 +167,16 @@ def _run_existing_tests(repo_path: str) -> dict:
         }
 
     except subprocess.TimeoutExpired:
-        print("[tests] Existing tests timed out (120s)")
+        cprint("[tests] Existing tests timed out (120s)")
         return {"passed": False, "output": "Timeout after 120s", "count": 0}
     except (FileNotFoundError, subprocess.CalledProcessError):
-        print("[tests] pytest not found — trying unittest")
+        cprint("[tests] pytest not found — trying unittest")
         return _run_unittest(repo_path)
     except subprocess.CalledProcessError:
-        print("[tests] pytest not found — trying unittest")
+        cprint("[tests] pytest not found — trying unittest")
         return _run_unittest(repo_path)
     except Exception as e:
-        print(f"[tests] Error running tests: {e}")
+        cprint(f"[tests] Error running tests: {e}")
         return {"passed": False, "output": str(e), "count": 0}
 
 
@@ -197,7 +198,7 @@ def _load_or_store_baseline(repo_path: str, current_failures: int) -> int:
         if baseline_file.exists():
             data = _json.loads(baseline_file.read_text())
             stored = data.get("baseline_failures", current_failures)
-            print(f"[tests] Baseline: {stored} pre-existing failure(s)")
+            cprint(f"[tests] Baseline: {stored} pre-existing failure(s)")
             return stored
         else:
             # First run — store as baseline
@@ -206,7 +207,7 @@ def _load_or_store_baseline(repo_path: str, current_failures: int) -> int:
                 "repo": repo_name,
                 "note": "Failures present before any SAGE patch was applied"
             }, indent=2))
-            print(f"[tests] Baseline stored: {current_failures} failure(s) (pre-existing)")
+            cprint(f"[tests] Baseline stored: {current_failures} failure(s) (pre-existing)")
             return current_failures
     except Exception:
         return current_failures  # fallback: treat all as pre-existing
@@ -220,7 +221,7 @@ def _install_repo_deps(repo_path: str):
     req = Path(repo_path) / "requirements.txt"
     if not req.exists():
         return
-    print(f"[tests] Installing repo deps from {req}...")
+    cprint(f"[tests] Installing repo deps from {req}...")
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r", str(req), "-q"],
@@ -229,11 +230,11 @@ def _install_repo_deps(repo_path: str):
             timeout=120,
         )
         if result.returncode == 0:
-            print(f"[tests] Deps installed OK")
+            cprint(f"[tests] Deps installed OK")
         else:
-            print(f"[tests] Dep install warning: {result.stderr[:200]}")
+            cprint(f"[tests] Dep install warning: {result.stderr[:200]}")
     except Exception as e:
-        print(f"[tests] Could not install deps: {e}")
+        cprint(f"[tests] Could not install deps: {e}")
 
 
 def _run_unittest(repo_path: str) -> dict:
@@ -248,7 +249,7 @@ def _run_unittest(repo_path: str) -> dict:
         )
         passed = result.returncode == 0
         output = result.stdout + result.stderr
-        print(f"[tests] unittest: {'PASSED' if passed else 'FAILED'}")
+        cprint(f"[tests] unittest: {'PASSED' if passed else 'FAILED'}")
         return {"passed": passed, "output": output, "count": 0}
     except Exception as e:
         return {"passed": False, "output": str(e), "count": 0}
@@ -298,14 +299,14 @@ def _generate_and_run_security_tests(
         if test_code:
             test_file.write_text(test_code)
             generated_files.append(str(test_file))
-            print(f"[tests] Security test generated → {test_file.name}")
+            cprint(f"[tests] Security test generated → {test_file.name}")
 
     if not generated_files:
-        print("[tests] No security tests generated")
+        cprint("[tests] No security tests generated")
         return {"passed": True, "output": "No tests generated", "files": []}
 
     # Run generated security tests
-    print(f"[tests] Running {len(generated_files)} security test(s)...")
+    cprint(f"[tests] Running {len(generated_files)} security test(s)...")
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", str(_tests_dir()), "-v", "--tb=short"],
@@ -315,17 +316,17 @@ def _generate_and_run_security_tests(
         )
         passed = result.returncode == 0
         output = result.stdout + result.stderr
-        print(f"[tests] Security tests: {'PASSED' if passed else 'FAILED'}")
+        cprint(f"[tests] Security tests: {'PASSED' if passed else 'FAILED'}")
         return {"passed": passed, "output": output, "files": generated_files}
     except Exception as e:
-        print(f"[tests] Error running security tests: {e}")
+        cprint(f"[tests] Error running security tests: {e}")
         return {"passed": False, "output": str(e), "files": generated_files}
 
 
 def _generate_security_test(vuln: dict, patched_code: str) -> Optional[str]:
     """Ask Claude to write a security test for a confirmed vulnerability."""
     if not cfg.ANTHROPIC_API_KEY:
-        print(f"[tests] No Anthropic key — skipping test generation for {vuln['cve_id']}")
+        cprint(f"[tests] No Anthropic key — skipping test generation for {vuln['cve_id']}")
         return None
 
     cve_id    = vuln["cve_id"]
@@ -382,14 +383,14 @@ OUTPUT: Respond with ONLY valid Python code. No markdown fences. No explanation 
                 code = code[6:]
         return code.strip()
     except Exception as e:
-        print(f"[tests] Claude error generating test for {cve_id}: {e}")
+        cprint(f"[tests] Claude error generating test for {cve_id}: {e}")
         return None
 
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
 def print_test_summary(results: dict):
-    print(f"\n[tests] ── Test Results ──")
+    cprint(f"\n[tests] ── Test Results ──")
 
     et = results.get("existing_tests", {})
     st = results.get("security_tests", {})
@@ -397,15 +398,15 @@ def print_test_summary(results: dict):
     existing_status = "PASSED" if et.get("passed") else "FAILED" if et else "SKIPPED"
     security_status = "PASSED" if st.get("passed") else "FAILED" if st else "SKIPPED"
 
-    print(f"  Existing tests:  {existing_status} ({et.get('count', 0)} tests)")
-    print(f"  Security tests:  {security_status} ({len(st.get('files', []))} generated)")
-    print(f"  Overall:         {'✓ ALL PASSED — safe to raise PR' if results.get('all_passed') else '✗ FAILURES — PR blocked'}")
+    cprint(f"  Existing tests:  {existing_status} ({et.get('count', 0)} tests)")
+    cprint(f"  Security tests:  {security_status} ({len(st.get('files', []))} generated)")
+    cprint(f"  Overall:         {'✓ ALL PASSED — safe to raise PR' if results.get('all_passed') else '✗ FAILURES — PR blocked'}")
 
     if not results.get("all_passed"):
-        print(f"\n  Fix failing tests before raising the PR.")
-        print(f"  Test output saved — check data/tests/ for details.")
+        cprint(f"\n  Fix failing tests before raising the PR.")
+        cprint(f"  Test output saved — check data/tests/ for details.")
 
-    print(f"  Next: verifier → github PR")
+    cprint(f"  Next: verifier → github PR")
 
 
 def save_test_results(results: dict, output_path: str = ""):
@@ -424,4 +425,4 @@ def save_test_results(results: dict, output_path: str = ""):
     }
     with open(p, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"[tests] Results saved → {p}")
+    cprint(f"[tests] Results saved → {p}")

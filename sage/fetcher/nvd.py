@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sage.config import cfg
+from sage.utils.colors import cprint
 
 # NVD API base URL
 NVD_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -88,7 +89,7 @@ def fetch_cves_since(days: int = 1) -> list[dict]:
 
     # Fetch each chunk (oldest first for cleaner output)
     chunks.reverse()
-    print(f"[fetcher] Fetching {days} days in {len(chunks)} chunk(s)...")
+    cprint(f"[fetcher] Fetching {days} days in {len(chunks)} chunk(s)...")
 
     for chunk_start, chunk_end in chunks:
         chunk_cves = _fetch_window(chunk_start, chunk_end)
@@ -96,7 +97,7 @@ def fetch_cves_since(days: int = 1) -> list[dict]:
         if len(chunks) > 1:
             _sleep()
 
-    print(f"[fetcher] Total CVEs fetched: {len(all_cves)}")
+    cprint(f"[fetcher] Total CVEs fetched: {len(all_cves)}")
     return all_cves
 
 
@@ -106,7 +107,7 @@ def _fetch_window(start: datetime, end: datetime) -> list[dict]:
     pub_start = start.strftime(fmt)
     pub_end   = end.strftime(fmt)
 
-    print(f"[fetcher] Window: {pub_start[:10]} → {pub_end[:10]}")
+    cprint(f"[fetcher] Window: {pub_start[:10]} → {pub_end[:10]}")
 
     all_cves = []
     start_index = 0
@@ -124,7 +125,7 @@ def _fetch_window(start: datetime, end: datetime) -> list[dict]:
 
         data = _make_request(params)
         if data is None:
-            print("[fetcher] Failed to fetch page — stopping.")
+            cprint("[fetcher] Failed to fetch page — stopping.")
             break
 
         vulnerabilities = data.get("vulnerabilities", [])
@@ -132,7 +133,7 @@ def _fetch_window(start: datetime, end: datetime) -> list[dict]:
 
         total_results  = data.get("totalResults", 0)
         fetched_so_far = start_index + len(vulnerabilities)
-        print(f"[fetcher] {fetched_so_far}/{total_results} CVEs fetched")
+        cprint(f"[fetcher] {fetched_so_far}/{total_results} CVEs fetched")
 
         if fetched_so_far >= total_results:
             break
@@ -190,36 +191,36 @@ def _make_request(params: dict, retry: int = 0) -> Optional[dict]:
         if response.status_code == 429:
             if retry < MAX_RETRIES:
                 wait = RETRY_BACKOFF * (retry + 1)
-                print(f"[fetcher] Rate limited (429). Waiting {wait}s before retry {retry+1}/{MAX_RETRIES}...")
+                cprint(f"[fetcher] Rate limited (429). Waiting {wait}s before retry {retry+1}/{MAX_RETRIES}...")
                 time.sleep(wait)
                 return _make_request(params, retry + 1)
             else:
-                print("[fetcher] Rate limit retries exhausted.")
+                cprint("[fetcher] Rate limit retries exhausted.")
                 return None
 
         # NVD server overloaded
         if response.status_code == 503:
             if retry < MAX_RETRIES:
                 wait = RETRY_BACKOFF * (retry + 1)
-                print(f"[fetcher] NVD unavailable (503). Waiting {wait}s before retry {retry+1}/{MAX_RETRIES}...")
+                cprint(f"[fetcher] NVD unavailable (503). Waiting {wait}s before retry {retry+1}/{MAX_RETRIES}...")
                 time.sleep(wait)
                 return _make_request(params, retry + 1)
             else:
-                print("[fetcher] NVD unavailable after retries.")
+                cprint("[fetcher] NVD unavailable after retries.")
                 return None
 
         response.raise_for_status()
         return response.json()
 
     except requests.exceptions.Timeout:
-        print("[fetcher] Request timed out.")
+        cprint("[fetcher] Request timed out.")
         return None
     except requests.exceptions.ConnectionError:
-        print("[fetcher] Connection error — check internet connection.")
+        cprint("[fetcher] Connection error — check internet connection.")
         return None
     except requests.exceptions.HTTPError as e:
-        print(f"[fetcher] HTTP error: {e}")
+        cprint(f"[fetcher] HTTP error: {e}")
         return None
     except Exception as e:
-        print(f"[fetcher] Unexpected error: {e}")
+        cprint(f"[fetcher] Unexpected error: {e}")
         return None

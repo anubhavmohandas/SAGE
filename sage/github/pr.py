@@ -36,6 +36,7 @@ from typing import Optional
 import requests
 
 from sage.config import cfg
+from sage.utils.colors import cprint
 
 
 PATCHES_DIR = Path("data/patches")
@@ -68,14 +69,14 @@ def run_github_pr(
         {"pr_url": str, "branch": str, "draft": bool, "skipped": bool}
     """
     if not cfg.GITHUB_TOKEN or not cfg.GITHUB_REPO:
-        print("[github] GITHUB_TOKEN or GITHUB_REPO not set — skipping PR creation")
+        cprint("[github] GITHUB_TOKEN or GITHUB_REPO not set — skipping PR creation")
         return {"skipped": True, "reason": "No GitHub credentials"}
 
     dep_bump    = patch_result.get("dep_bump")
     code_patches = patch_result.get("code_patches", [])
 
     if not dep_bump and not code_patches:
-        print("[github] Nothing to patch — no PR needed")
+        cprint("[github] Nothing to patch — no PR needed")
         return {"skipped": True, "reason": "No patches generated"}
 
     # Determine if PR should be draft (tests failed)
@@ -87,27 +88,27 @@ def run_github_pr(
     date_str = datetime.now().strftime("%Y-%m-%d-%H%M")
     branch   = f"sage/security-patch-{date_str}"
 
-    print(f"[github] Creating branch: {branch}")
-    print(f"[github] Draft PR: {is_draft} (tests {'passed' if tests_passed else 'failed'})")
+    cprint(f"[github] Creating branch: {branch}")
+    cprint(f"[github] Draft PR: {is_draft} (tests {'passed' if tests_passed else 'failed'})")
 
     if dry_run:
-        print(f"[github] DRY RUN — skipping git operations")
+        cprint(f"[github] DRY RUN — skipping git operations")
         pr_body = _build_pr_body(confirmed, all_cves, patch_result, test_results, verify_results)
-        print(f"\n[github] PR body preview:\n{'='*60}")
-        print(pr_body[:1000] + "..." if len(pr_body) > 1000 else pr_body)
-        print(f"{'='*60}\n")
+        cprint(f"\n[github] PR body preview:\n{'='*60}")
+        cprint(pr_body[:1000] + "..." if len(pr_body) > 1000 else pr_body)
+        cprint(f"{'='*60}\n")
         return {"skipped": False, "dry_run": True, "branch": branch}
 
     # Step 1 — Create branch
     ok, err = _git_create_branch(repo_path, branch)
     if not ok:
-        print(f"[github] Failed to create branch: {err}")
+        cprint(f"[github] Failed to create branch: {err}")
         return {"skipped": True, "reason": err}
 
     # Step 2 — Apply patches to repo
     applied = _apply_patches(patch_result, repo_path)
     if not applied:
-        print("[github] Nothing applied — aborting")
+        cprint("[github] Nothing applied — aborting")
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": "No files changed"}
 
@@ -117,7 +118,7 @@ def run_github_pr(
         cwd=repo_path, capture_output=True, text=True, timeout=10,
     )
     if not status.stdout.strip():
-        print("[github] Repo already up to date — patches match current HEAD, no PR needed")
+        cprint("[github] Repo already up to date — patches match current HEAD, no PR needed")
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": "Repo already patched — all fixes already on main"}
 
@@ -125,14 +126,14 @@ def run_github_pr(
     commit_msg = _build_commit_message(confirmed, all_cves)
     ok, err = _git_commit(repo_path, commit_msg)
     if not ok:
-        print(f"[github] Commit failed: {err}")
+        cprint(f"[github] Commit failed: {err}")
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": err}
 
     # Step 4 — Push
     ok, err = _git_push(repo_path, branch)
     if not ok:
-        print(f"[github] Push failed: {err}")
+        cprint(f"[github] Push failed: {err}")
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": err}
 
@@ -145,7 +146,7 @@ def run_github_pr(
     # scanning SAGE). Always prefer the repo that owns the branch we just pushed.
     target_repo = _detect_github_repo(repo_path) or cfg.GITHUB_REPO
     if target_repo != cfg.GITHUB_REPO:
-        print(f"[github] Note: GITHUB_REPO env={cfg.GITHUB_REPO}, using detected repo={target_repo}")
+        cprint(f"[github] Note: GITHUB_REPO env={cfg.GITHUB_REPO}, using detected repo={target_repo}")
 
     pr_url = _create_github_pr(
         repo=target_repo,
@@ -157,7 +158,7 @@ def run_github_pr(
     )
 
     if pr_url:
-        print(f"[github] PR created → {pr_url}")
+        cprint(f"[github] PR created → {pr_url}")
         return {"pr_url": pr_url, "branch": branch, "draft": is_draft, "skipped": False}
     else:
         return {"skipped": True, "reason": "PR creation failed"}
@@ -228,7 +229,7 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
             dst = repo / name
             if dst.exists():
                 dst.write_text(src.read_text())
-                print(f"[github] Applied dep bump → {name}")
+                cprint(f"[github] Applied dep bump → {name}")
                 applied = True
                 break
 
@@ -248,10 +249,10 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
                 dst = repo / original_path
                 if patched_file.exists() and dst.exists():
                     dst.write_text(patched_file.read_text())
-                    print(f"[github] Applied code patch → {original_path}")
+                    cprint(f"[github] Applied code patch → {original_path}")
                     applied = True
                 elif not dst.exists():
-                    print(f"[github] WARN: patch target not found → {original_path}")
+                    cprint(f"[github] WARN: patch target not found → {original_path}")
         else:
             # Fallback: filename reconstruction (only works for single-level paths)
             for patched_file in patch_dir.glob("patched_*.py"):
@@ -259,7 +260,7 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
                 dst = repo / original_name
                 if dst.exists():
                     dst.write_text(patched_file.read_text())
-                    print(f"[github] Applied code patch → {original_name}")
+                    cprint(f"[github] Applied code patch → {original_name}")
                     applied = True
 
     return applied
@@ -457,28 +458,28 @@ def _create_github_pr(
         if pr_resp.status_code in (200, 201):
             return pr_resp.json().get("html_url")
         else:
-            print(f"[github] API error {pr_resp.status_code}: {pr_resp.text[:200]}")
+            cprint(f"[github] API error {pr_resp.status_code}: {pr_resp.text[:200]}")
             return None
 
     except Exception as e:
-        print(f"[github] PR creation error: {e}")
+        cprint(f"[github] PR creation error: {e}")
         return None
 
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
 def print_pr_summary(result: dict):
-    print(f"\n[github] ── PR Result ──")
+    cprint(f"\n[github] ── PR Result ──")
     if result.get("skipped"):
-        print(f"  Skipped: {result.get('reason', 'unknown')}")
+        cprint(f"  Skipped: {result.get('reason', 'unknown')}")
         return
     if result.get("dry_run"):
-        print(f"  Dry run complete — branch would be: {result.get('branch')}")
+        cprint(f"  Dry run complete — branch would be: {result.get('branch')}")
         return
-    print(f"  PR URL:  {result.get('pr_url', 'N/A')}")
-    print(f"  Branch:  {result.get('branch', 'N/A')}")
-    print(f"  Draft:   {result.get('draft', False)}")
-    print(f"\n  Pipeline complete ✓")
+    cprint(f"  PR URL:  {result.get('pr_url', 'N/A')}")
+    cprint(f"  Branch:  {result.get('branch', 'N/A')}")
+    cprint(f"  Draft:   {result.get('draft', False)}")
+    cprint(f"\n  Pipeline complete ✓")
 
 
 def save_pr_result(result: dict, output_path: str = ""):
@@ -487,4 +488,4 @@ def save_pr_result(result: dict, output_path: str = ""):
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w") as f:
         json.dump(result, f, indent=2)
-    print(f"[github] Result saved → {p}")
+    cprint(f"[github] Result saved → {p}")

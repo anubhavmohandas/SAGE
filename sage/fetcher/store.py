@@ -26,6 +26,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
+from sage.utils.colors import cprint
 
 
 # DB file location — repo-scoped at runtime via cfg.data_dir()
@@ -89,7 +90,7 @@ def init_db():
 
     conn.commit()
     conn.close()
-    print("[store] Database initialized.")
+    cprint("[store] Database initialized.")
 
     # One-time migration: copy CVEs from legacy data/sage.db into the scoped DB,
     # then delete the legacy file so it stops being confusing.
@@ -107,7 +108,7 @@ def init_db():
                 n = migrated.execute("SELECT COUNT(*) FROM cves").fetchone()[0]
                 migrated.close()
                 if n > 0:
-                    print(f"[store] Migrated {n} CVEs from legacy data/sage.db → {scoped}")
+                    cprint(f"[store] Migrated {n} CVEs from legacy data/sage.db → {scoped}")
             # Delete legacy DB once all known repo DBs are populated
             # (safe to remove — all data is in scoped DBs now)
             _maybe_delete_legacy(legacy)
@@ -136,7 +137,7 @@ def _maybe_delete_legacy(legacy: Path):
                 break
         if all_populated:
             legacy.unlink()
-            print(f"[store] Legacy data/sage.db removed — all repo DBs populated")
+            cprint(f"[store] Legacy data/sage.db removed — all repo DBs populated")
     except Exception:
         pass
 
@@ -188,7 +189,7 @@ def save_cves(cve_entries: list[dict]):
             save_cve(entry)
             new_count += 1
 
-    print(f"[store] Saved {new_count} new CVEs ({len(cve_entries) - new_count} already known).")
+    cprint(f"[store] Saved {new_count} new CVEs ({len(cve_entries) - new_count} already known).")
 
 
 def is_known(cve_id: str) -> bool:

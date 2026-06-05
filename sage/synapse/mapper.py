@@ -24,6 +24,7 @@ from pathlib import Path
 import networkx as nx
 
 from sage.fetcher.store import get_new_cves
+from sage.utils.colors import cprint
 
 
 # CVE severity → color mapping for the visualization
@@ -55,7 +56,7 @@ def seed_libraries(G: nx.DiGraph, repo_path: str) -> nx.DiGraph:
                        color="#e8960a", info=f"Library: {pkg}", children=[])
             added += 1
     if added:
-        print(f"[mapper] Seeded {added} library nodes from requirements.txt")
+        cprint(f"[mapper] Seeded {added} library nodes from requirements.txt")
     return G
 
 
@@ -77,7 +78,7 @@ def attach_cves(G: nx.DiGraph) -> nx.DiGraph:
             attach_cves(G)           ← mutation style
     """
     cves = get_new_cves()
-    print(f"[mapper] Attaching {len(cves)} CVEs to the graph...")
+    cprint(f"[mapper] Attaching {len(cves)} CVEs to the graph...")
 
     attached = 0
     for cve_row in cves:
@@ -127,7 +128,7 @@ def attach_cves(G: nx.DiGraph) -> nx.DiGraph:
         G.add_edge(target_lib, cve_node_id, label="AFFECTS")
         attached += 1
 
-    print(f"[mapper] Attached {attached}/{len(cves)} CVEs to library nodes")
+    cprint(f"[mapper] Attached {attached}/{len(cves)} CVEs to library nodes")
     return G
 
 

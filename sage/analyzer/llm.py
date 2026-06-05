@@ -22,6 +22,7 @@ Manual response schema:
 import json
 from pathlib import Path
 from typing import Optional
+from sage.utils.colors import cprint
 
 
 def _prompts_dir() -> Path:
@@ -75,25 +76,25 @@ def _ask_mode() -> str:
     # Non-interactive: no prompt, decide automatically
     if not sys.stdin.isatty():
         mode = "api" if has_api_key else "manual"
-        print(f"[analyzer] Non-interactive — {mode} mode")
+        cprint(f"[analyzer] Non-interactive — {mode} mode")
         return mode
 
     # Interactive: always ask
-    print("\n[analyzer] ── Analysis Mode ──")
+    cprint("\n[analyzer] ── Analysis Mode ──")
     if has_api_key:
         model_hint = "Gemini" if cfg.GEMINI_API_KEY else "Claude"
-        print(f"  API keys detected ({model_hint} available)")
+        cprint(f"  API keys detected ({model_hint} available)")
     else:
-        print("  No API keys found in .env")
-    print("  [1] API mode   — call LLM automatically")
-    print("  [2] Manual mode — generate prompt files, paste into Claude, save responses")
+        cprint("  No API keys found in .env")
+    cprint("  [1] API mode   — call LLM automatically")
+    cprint("  [2] Manual mode — generate prompt files, paste into Claude, save responses")
     while True:
         choice = input("  Your choice (1/2): ").strip()
         if choice == "1":
             return "api"
         if choice == "2":
             return "manual"
-        print("  Please enter 1 or 2.")
+        cprint("  Please enter 1 or 2.")
 
 
 def analyze_findings(
@@ -132,7 +133,7 @@ def _analyze_api(
     if reach_results:
         for r in reach_results:
             reach_by_cve[r["cve_id"]] = r.get("paths", [])
-    print(f"[analyzer] Analyzing {len(by_cve)} CVEs via API...")
+    cprint(f"[analyzer] Analyzing {len(by_cve)} CVEs via API...")
     confirmed = []
     for cve_id, cve_findings in by_cve.items():
         result = _analyze_single_cve_api(
@@ -141,7 +142,7 @@ def _analyze_api(
         )
         if result:
             confirmed.append(result)
-    print(f"[analyzer] Confirmed: {len(confirmed)}/{len(by_cve)} CVEs actually exploitable")
+    cprint(f"[analyzer] Confirmed: {len(confirmed)}/{len(by_cve)} CVEs actually exploitable")
     return confirmed
 
 
@@ -173,7 +174,7 @@ def _analyze_manual(
         if cve_id not in by_cve:
             by_cve[cve_id] = []
 
-    print(f"[analyzer] {len(by_cve)} CVEs to analyze (manual mode)")
+    cprint(f"[analyzer] {len(by_cve)} CVEs to analyze (manual mode)")
 
     confirmed = []
     new_prompts = 0
@@ -207,9 +208,9 @@ def _analyze_manual(
     total_with_prompts = len(list(_prompts_dir().glob("*.txt")))
     total_with_responses = len(list(_responses_dir().glob("*.json")))
 
-    print(f"[analyzer] Prompts exported: {new_prompts} new  |  {skipped} already existed")
-    print(f"[analyzer] Responses read:   {total_with_responses}/{total_with_prompts}")
-    print(f"[analyzer] Confirmed: {len(confirmed)}/{len(by_cve)} CVEs exploitable")
+    cprint(f"[analyzer] Prompts exported: {new_prompts} new  |  {skipped} already existed")
+    cprint(f"[analyzer] Responses read:   {total_with_responses}/{total_with_prompts}")
+    cprint(f"[analyzer] Confirmed: {len(confirmed)}/{len(by_cve)} CVEs exploitable")
 
     if new_prompts > 0 or (total_with_prompts > total_with_responses):
         pending = total_with_prompts - total_with_responses
@@ -217,15 +218,15 @@ def _analyze_manual(
             f for f in _prompts_dir().glob("*.txt")
             if not (_responses_dir() / f.name.replace(".txt", ".json")).exists()
         ])
-        print(f"\n[analyzer] ── Manual review needed ──")
-        print(f"  {pending} CVE(s) awaiting your review.\n")
+        cprint(f"\n[analyzer] ── Manual review needed ──")
+        cprint(f"  {pending} CVE(s) awaiting your review.\n")
         for pf in pending_files:
-            print(f"  ┌─ {pf.name} ─────────────────────────────────────────")
-            print(f"  │  cat \"{pf.resolve()}\"")
+            cprint(f"  ┌─ {pf.name} ─────────────────────────────────────────")
+            cprint(f"  │  cat \"{pf.resolve()}\"")
             resp_path = _responses_dir() / pf.name.replace(".txt", ".json")
-            print(f"  │  Paste content into Claude → save response as:")
-            print(f"  │  \"{resp_path.resolve()}\"")
-            print(f"  └────────────────────────────────────────────────────\n")
+            cprint(f"  │  Paste content into Claude → save response as:")
+            cprint(f"  │  \"{resp_path.resolve()}\"")
+            cprint(f"  └────────────────────────────────────────────────────\n")
         # Wait for user to paste responses, then continue automatically
         _wait_for_responses(pending_files, by_cve, G)
         # Re-read all responses after user confirms
@@ -236,7 +237,7 @@ def _analyze_manual(
                 result = _read_response(cve_id, by_cve[cve_id], G)
                 if result:
                     confirmed.append(result)
-        print(f"[analyzer] Confirmed after review: {len(confirmed)}/{len(by_cve)} CVEs exploitable")
+        cprint(f"[analyzer] Confirmed after review: {len(confirmed)}/{len(by_cve)} CVEs exploitable")
 
     return confirmed
 
@@ -256,10 +257,10 @@ def _wait_for_responses(pending_files: list, by_cve: dict, G):
     responses_dir = _responses_dir()
     total = len(pending_files)
 
-    print(f"\n[analyzer] ── Pipeline paused — waiting for responses ──")
-    print(f"  Open each prompt file, paste into Claude, save the JSON response.")
-    print(f"  The pipeline will continue automatically once all {total} response(s) are saved.")
-    print(f"  Or press Enter at any time to continue with responses saved so far.\n")
+    cprint(f"\n[analyzer] ── Pipeline paused — waiting for responses ──")
+    cprint(f"  Open each prompt file, paste into Claude, save the JSON response.")
+    cprint(f"  The pipeline will continue automatically once all {total} response(s) are saved.")
+    cprint(f"  Or press Enter at any time to continue with responses saved so far.\n")
 
     while True:
         # Check how many are done
@@ -270,17 +271,17 @@ def _wait_for_responses(pending_files: list, by_cve: dict, G):
         remaining = total - done
 
         if remaining == 0:
-            print(f"\n[analyzer] All {total} response(s) received — continuing pipeline...")
+            cprint(f"\n[analyzer] All {total} response(s) received — continuing pipeline...")
             break
 
-        print(f"  [{done}/{total} saved]  Waiting... (press Enter to continue anyway)", end="\r", flush=True)
+        cprint(f"  [{done}/{total} saved]  Waiting... (press Enter to continue anyway)", end="\r", flush=True)
 
         # Non-blocking check: poll every 3s, but also catch Enter
         import select
         ready, _, _ = select.select([sys.stdin], [], [], 3.0)
         if ready:
             sys.stdin.readline()  # consume the Enter
-            print(f"\n[analyzer] Continuing with {done}/{total} responses saved...")
+            cprint(f"\n[analyzer] Continuing with {done}/{total} responses saved...")
             break
 
 
@@ -328,7 +329,7 @@ def _analyze_single_cve_api(
     if not function_codes:
         function_codes = _extract_file_snippets(blast.get("exposed_files", []), repo_path, package)
     if not function_codes and not findings:
-        print(f"[analyzer] {cve_id} — no code to analyze, skipping")
+        cprint(f"[analyzer] {cve_id} — no code to analyze, skipping")
         return None
 
     prompt = _build_prompt(cve_id, severity, package, cwe, affected_r, function_codes, findings, reach_paths)
@@ -355,7 +356,7 @@ def _analyze_single_cve_api(
             "function_codes":     function_codes,
         }
 
-    print(f"[analyzer] {cve_id} → NOT exploitable "
+    cprint(f"[analyzer] {cve_id} → NOT exploitable "
           f"({response.get('confidence', 0):.1f}): {response.get('reason', '')[:80]}")
     return None
 
@@ -369,15 +370,15 @@ def _call_llm_api(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Op
         # Only fall back to Claude if Gemini quota exhausted — not on every 429
         # (Gemini 429 = rate limit, not quota; wait and retry instead)
         if cfg.ANTHROPIC_API_KEY:
-            print(f"[analyzer] Falling back to Claude for {cve_id}")
+            cprint(f"[analyzer] Falling back to Claude for {cve_id}")
             result = _call_claude(prompt, cve_id, cfg, severity)
             if result is None:
-                print(f"[analyzer] Both APIs failed for {cve_id} — skipping")
+                cprint(f"[analyzer] Both APIs failed for {cve_id} — skipping")
             return result
         return None
     elif cfg.ANTHROPIC_API_KEY:
         return _call_claude(prompt, cve_id, cfg, severity)
-    print(f"[analyzer] No API key available for {cve_id}")
+    cprint(f"[analyzer] No API key available for {cve_id}")
     return None
 
 
@@ -395,7 +396,7 @@ def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
     try:
         import google.generativeai as genai
     except ImportError:
-        print("[analyzer] Neither google-genai nor google-generativeai installed.")
+        cprint("[analyzer] Neither google-genai nor google-generativeai installed.")
         return None
 
     import warnings
@@ -424,25 +425,25 @@ def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
                     response = model.generate_content(prompt)
             raw = _strip_fences(response.text.strip())
             result = json.loads(raw)
-            print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
+            cprint(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
                   f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
             time.sleep(5)  # 5s between calls — stay under free tier 15 req/min
             return result
         except json.JSONDecodeError as e:
-            print(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
+            cprint(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
             return None
         except Exception as e:
             err = str(e)
             if "429" in err or "quota" in err.lower() or "rate" in err.lower():
                 if attempt < 3:
                     wait = 15 * (2 ** attempt)  # 15s, 30s, 60s — generous backoff
-                    print(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
+                    cprint(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
                     time.sleep(wait)
                 else:
-                    print(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
+                    cprint(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
                     return None
             else:
-                print(f"[analyzer] Gemini error for {cve_id}: {e}")
+                cprint(f"[analyzer] Gemini error for {cve_id}: {e}")
                 return None
     return None
 
@@ -475,25 +476,25 @@ def _call_gemini_new_sdk(prompt: str, cve_id: str, cfg, genai_module) -> Optiona
                 raise last_err
             raw = _strip_fences(response.text.strip())
             result = json.loads(raw)
-            print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
+            cprint(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
                   f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
             time.sleep(5)
             return result
         except json.JSONDecodeError as e:
-            print(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
+            cprint(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
             return None
         except Exception as e:
             err = str(e)
             if "429" in err or "quota" in err.lower() or "rate" in err.lower():
                 if attempt < 3:
                     wait = 15 * (2 ** attempt)
-                    print(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
+                    cprint(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
                     time.sleep(wait)
                 else:
-                    print(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
+                    cprint(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
                     return None
             else:
-                print(f"[analyzer] Gemini error for {cve_id}: {e}")
+                cprint(f"[analyzer] Gemini error for {cve_id}: {e}")
                 return None
     return None
 
@@ -512,11 +513,11 @@ def _call_claude(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Opt
         )
         raw = _strip_fences(response.content[0].text.strip())
         result = json.loads(raw)
-        print(f"[analyzer] {cve_id} (Claude/{model.split('-')[1]}) → vulnerable={result.get('vulnerable')} "
+        cprint(f"[analyzer] {cve_id} (Claude/{model.split('-')[1]}) → vulnerable={result.get('vulnerable')} "
               f"confidence={result.get('confidence', 0):.2f}")
         return result
     except Exception as e:
-        print(f"[analyzer] Claude error for {cve_id}: {e}")
+        cprint(f"[analyzer] Claude error for {cve_id}: {e}")
         return None
 
 
@@ -577,7 +578,7 @@ def _export_prompt(
 
     prompt_file = _prompts_dir() / f"{cve_id}.txt"
     prompt_file.write_text(prompt)
-    print(f"[analyzer] Prompt saved → {prompt_file}")
+    cprint(f"[analyzer] Prompt saved → {prompt_file}")
 
 
 def _build_prompt(
@@ -668,18 +669,18 @@ def _read_response(cve_id: str, findings: list[dict], G) -> Optional[dict]:
     try:
         response = json.loads(response_file.read_text())
     except Exception as e:
-        print(f"[analyzer] Bad response file for {cve_id}: {e}")
+        cprint(f"[analyzer] Bad response file for {cve_id}: {e}")
         return None
 
     if not response.get("vulnerable", False):
-        print(f"[analyzer] {cve_id} → NOT exploitable "
+        cprint(f"[analyzer] {cve_id} → NOT exploitable "
               f"({response.get('confidence', 0):.1f}): {response.get('reason', '')[:80]}")
         return None
 
     cve_node  = f"cve:{cve_id}"
     node_data = G.nodes.get(cve_node, {})
 
-    print(f"[analyzer] {cve_id} → CONFIRMED exploitable "
+    cprint(f"[analyzer] {cve_id} → CONFIRMED exploitable "
           f"(confidence: {response.get('confidence', 0):.1f})")
 
     return {
@@ -706,24 +707,24 @@ def save_confirmed(confirmed: list[dict], output_path: str = ""):
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w") as f:
         json.dump(confirmed, f, indent=2)
-    print(f"[analyzer] Confirmed vulnerabilities saved → {p}")
+    cprint(f"[analyzer] Confirmed vulnerabilities saved → {p}")
 
 
 def print_analysis_summary(confirmed: list[dict]):
     if not confirmed:
-        print("[analyzer] No exploitable vulnerabilities confirmed.")
+        cprint("[analyzer] No exploitable vulnerabilities confirmed.")
         return
 
-    print(f"\n[analyzer] ── Confirmed Vulnerabilities ──")
+    cprint(f"\n[analyzer] ── Confirmed Vulnerabilities ──")
     for v in confirmed:
-        print(f"\n  [{v['severity']:8s}] {v['cve_id']}")
-        print(f"  Package:    {v['package']} {v['affected_range']}")
-        print(f"  Confidence: {v['confidence']:.0%}")
-        print(f"  Reason:     {v['reason']}")
+        cprint(f"\n  [{v['severity']:8s}] {v['cve_id']}")
+        cprint(f"  Package:    {v['package']} {v['affected_range']}")
+        cprint(f"  Confidence: {v['confidence']:.0%}")
+        cprint(f"  Reason:     {v['reason']}")
         if v.get("attack_vector"):
-            print(f"  Attack:     {v['attack_vector']}")
+            cprint(f"  Attack:     {v['attack_vector']}")
         if v.get("recommendation"):
-            print(f"  Fix:        {v['recommendation']}")
+            cprint(f"  Fix:        {v['recommendation']}")
 
 
 # ─── Code extraction (unchanged) ─────────────────────────────────────────────

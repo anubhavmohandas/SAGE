@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 from packaging.version import Version
 from packaging.specifiers import SpecifierSet
+from sage.utils.colors import cprint
 
 
 # ─── Stack Detection ──────────────────────────────────────────────────────────
@@ -64,36 +65,36 @@ def detect_stack(repo_path: str) -> dict[str, str]:
         if req_path.exists():
             found = _parse_requirements_txt(req_path)
             packages.update(found)
-            print(f"[filter] Found {len(found)} packages in {req_file}")
+            cprint(f"[filter] Found {len(found)} packages in {req_file}")
 
     # Python — pyproject.toml
     pyproject = path / "pyproject.toml"
     if pyproject.exists():
         found = _parse_pyproject_toml(pyproject)
         packages.update(found)
-        print(f"[filter] Found {len(found)} packages in pyproject.toml")
+        cprint(f"[filter] Found {len(found)} packages in pyproject.toml")
 
     # Python — Pipfile
     pipfile = path / "Pipfile"
     if pipfile.exists():
         found = _parse_pipfile(pipfile)
         packages.update(found)
-        print(f"[filter] Found {len(found)} packages in Pipfile")
+        cprint(f"[filter] Found {len(found)} packages in Pipfile")
 
     # Node/JS — package.json
     package_json = path / "package.json"
     if package_json.exists():
         found = _parse_package_json(package_json)
         packages.update(found)
-        print(f"[filter] Found {len(found)} packages in package.json")
+        cprint(f"[filter] Found {len(found)} packages in package.json")
 
     # Browser extension — manifest.json (no deps, but detect the ecosystem)
     manifest = path / "manifest.json"
     if manifest.exists() and not packages:
-        print("[filter] Detected browser extension (manifest.json). No package dependencies.")
+        cprint("[filter] Detected browser extension (manifest.json). No package dependencies.")
 
     if not packages:
-        print("[filter] No dependency files found in repo.")
+        cprint("[filter] No dependency files found in repo.")
 
     return packages
 
@@ -166,7 +167,7 @@ def _parse_package_json(path: Path) -> dict[str, str]:
                 packages[name.lower()] = clean_version
 
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[filter] Warning: Could not parse package.json: {e}")
+        cprint(f"[filter] Warning: Could not parse package.json: {e}")
 
     return packages
 
@@ -195,7 +196,7 @@ def _parse_pyproject_toml(path: Path) -> dict[str, str]:
                 with open(path, "rb") as f:
                     data = tomllib.load(f)
             except ImportError:
-                print("[filter] Warning: tomllib not available, skipping pyproject.toml")
+                cprint("[filter] Warning: tomllib not available, skipping pyproject.toml")
                 return packages
 
         deps = data.get("project", {}).get("dependencies", [])
@@ -209,7 +210,7 @@ def _parse_pyproject_toml(path: Path) -> dict[str, str]:
                 packages[name] = version
 
     except Exception as e:
-        print(f"[filter] Warning: Could not parse pyproject.toml: {e}")
+        cprint(f"[filter] Warning: Could not parse pyproject.toml: {e}")
 
     return packages
 
@@ -240,7 +241,7 @@ def _parse_pipfile(path: Path) -> dict[str, str]:
                         version = "any"
                     packages[name] = version
     except Exception as e:
-        print(f"[filter] Warning: Could not parse Pipfile: {e}")
+        cprint(f"[filter] Warning: Could not parse Pipfile: {e}")
 
     return packages
 
@@ -269,7 +270,7 @@ def filter_relevant_cves(raw_cves: list[dict], stack: dict[str, str]) -> list[di
         We normalize both sides: lowercase, replace hyphens/underscores.
     """
     if not stack:
-        print("[filter] Empty stack — no CVEs can match. Returning 0 results.")
+        cprint("[filter] Empty stack — no CVEs can match. Returning 0 results.")
         return []
 
     # Skip CVEs not yet analysed by NVD — they have no CPE data to match against
@@ -277,7 +278,7 @@ def filter_relevant_cves(raw_cves: list[dict], stack: dict[str, str]) -> list[di
     analysed = [c for c in raw_cves if c.get("cve", {}).get("vulnStatus") in ANALYSED]
     skipped = len(raw_cves) - len(analysed)
     if skipped:
-        print(f"[filter] Skipping {skipped} unanalysed CVEs (no CPE data yet)")
+        cprint(f"[filter] Skipping {skipped} unanalysed CVEs (no CPE data yet)")
 
     relevant = []
     for cve_entry in analysed:
@@ -287,12 +288,12 @@ def filter_relevant_cves(raw_cves: list[dict], stack: dict[str, str]) -> list[di
             cve_entry["sage_match"] = match
             relevant.append(cve_entry)
 
-    print(f"[filter] {len(relevant)}/{len(analysed)} analysed CVEs matched your stack")
+    cprint(f"[filter] {len(relevant)}/{len(analysed)} analysed CVEs matched your stack")
 
     # Debug: show what package names NVD actually uses
     # so we can tune our matching if 0 results come back
     if len(relevant) == 0 and raw_cves:
-        print("[filter] Debug — sampling CPE names from first 50 CVEs:")
+        cprint("[filter] Debug — sampling CPE names from first 50 CVEs:")
         seen = set()
         for entry in raw_cves[:50]:
             cve = entry.get("cve", {})
@@ -311,7 +312,7 @@ def filter_relevant_cves(raw_cves: list[dict], stack: dict[str, str]) -> list[di
         for pkg in stack.keys():
             matches = [k for k in seen if pkg.replace("_","-") in k or pkg in k]
             if matches:
-                print(f"[filter]   '{pkg}' found in CPEs: {matches[:3]}")
+                cprint(f"[filter]   '{pkg}' found in CPEs: {matches[:3]}")
 
     return relevant
 

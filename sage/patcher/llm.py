@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.config import cfg
+from sage.utils.colors import cprint
 
 
 def _patches_dir() -> Path:
@@ -58,7 +59,7 @@ def run_patcher(confirmed: list[dict], repo_path: str, all_cves: list[dict] = No
     """
     pd = _patches_dir()
 
-    print(f"[patcher] {len(confirmed)} confirmed exploitable CVE(s) → code patches")
+    cprint(f"[patcher] {len(confirmed)} confirmed exploitable CVE(s) → code patches")
 
     # 1. Code patches for confirmed exploitable CVEs
     code_patches = []
@@ -72,10 +73,10 @@ def run_patcher(confirmed: list[dict], repo_path: str, all_cves: list[dict] = No
     req_patch = _generate_dep_bump(cves_for_bump, repo_path)
 
     # Summary
-    print(f"\n[patcher] ── Patch Summary ──")
-    print(f"  Code patches generated: {len(code_patches)}")
-    print(f"  Dep bump generated:     {'yes' if req_patch else 'no'}")
-    print(f"  Output → {pd.resolve()}/")
+    cprint(f"\n[patcher] ── Patch Summary ──")
+    cprint(f"  Code patches generated: {len(code_patches)}")
+    cprint(f"  Dep bump generated:     {'yes' if req_patch else 'no'}")
+    cprint(f"  Output → {pd.resolve()}/")
 
     return {
         "code_patches": code_patches,
@@ -100,7 +101,7 @@ def _generate_code_patch(vuln: dict, repo_path: str) -> Optional[dict]:
     fn_codes  = vuln.get("function_codes", [])
 
     if not fn_codes and not functions:
-        print(f"[patcher] {cve_id} — no function code available, skipping code patch")
+        cprint(f"[patcher] {cve_id} — no function code available, skipping code patch")
         return None
 
     patch_dir = _patches_dir() / cve_id
@@ -125,7 +126,7 @@ def _generate_code_patch(vuln: dict, repo_path: str) -> Optional[dict]:
     # Write patch files
     _write_patch_files(patch_dir, vuln, repo_path, response)
 
-    print(f"[patcher] {cve_id} → code patch written to {patch_dir}/")
+    cprint(f"[patcher] {cve_id} → code patch written to {patch_dir}/")
     return {
         "cve_id":    cve_id,
         "patch_dir": str(patch_dir),
@@ -217,10 +218,10 @@ def _call_claude_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
                     raw = raw[4:]
             raw = raw.strip()
             result = json.loads(raw)
-            print(f"[patcher] {cve_id} (Claude Sonnet) → patch generated: {result.get('summary', '')[:80]}")
+            cprint(f"[patcher] {cve_id} (Claude Sonnet) → patch generated: {result.get('summary', '')[:80]}")
             return result
         except Exception as e:
-            print(f"[patcher] Claude error for {cve_id}: {e}")
+            cprint(f"[patcher] Claude error for {cve_id}: {e}")
 
     # Both APIs failed — fall back to manual
     return _manual_patch(prompt, cve_id)
@@ -253,13 +254,13 @@ def _call_gemini_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
         raw = _re.sub(r'^```(?:json)?\s*', '', raw)
         raw = _re.sub(r'\s*```$', '', raw).strip()
         result = json.loads(raw)
-        print(f"[patcher] {cve_id} (Gemini) → patch generated: {result.get('summary', '')[:80]}")
+        cprint(f"[patcher] {cve_id} (Gemini) → patch generated: {result.get('summary', '')[:80]}")
         return result
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower():
-            print(f"[patcher] Gemini quota exhausted for {cve_id}")
+            cprint(f"[patcher] Gemini quota exhausted for {cve_id}")
         else:
-            print(f"[patcher] Gemini error for {cve_id}: {e}")
+            cprint(f"[patcher] Gemini error for {cve_id}: {e}")
         return None
 
 
@@ -277,10 +278,10 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
     if response_file.exists():
         try:
             result = json.loads(response_file.read_text())
-            print(f"[patcher] {cve_id} → loaded manual patch response")
+            cprint(f"[patcher] {cve_id} → loaded manual patch response")
             return result
         except Exception as e:
-            print(f"[patcher] {cve_id} — invalid response JSON: {e}")
+            cprint(f"[patcher] {cve_id} — invalid response JSON: {e}")
             return None
 
     # Export prompt file
@@ -288,17 +289,17 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
 
     if not sys.stdin.isatty():
         # Non-interactive (CI/cron) — export and skip, pipeline continues
-        print(f"[patcher] {cve_id} — prompt exported (no API), skipping code patch")
-        print(f"  Run export_patches.sh to bundle and send to AI")
+        cprint(f"[patcher] {cve_id} — prompt exported (no API), skipping code patch")
+        cprint(f"  Run export_patches.sh to bundle and send to AI")
         return None
 
     # Interactive — pause and wait
-    print(f"\n[patcher] ── Manual patch needed: {cve_id} ──")
-    print(f"  Prompt saved → {prompt_file.resolve()}")
-    print(f"  1. Open the file above and paste into Claude / ChatGPT")
-    print(f"  2. Save the JSON response to:")
-    print(f"     {response_file.resolve()}")
-    print(f"  Press Enter when saved  |  S to skip this CVE")
+    cprint(f"\n[patcher] ── Manual patch needed: {cve_id} ──")
+    cprint(f"  Prompt saved → {prompt_file.resolve()}")
+    cprint(f"  1. Open the file above and paste into Claude / ChatGPT")
+    cprint(f"  2. Save the JSON response to:")
+    cprint(f"     {response_file.resolve()}")
+    cprint(f"  Press Enter when saved  |  S to skip this CVE")
 
     import select
     while True:
@@ -306,21 +307,21 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
         if ready:
             choice = sys.stdin.readline().strip().lower()
             if choice == "s":
-                print(f"[patcher] Skipping {cve_id}")
+                cprint(f"[patcher] Skipping {cve_id}")
                 return None
             break
         # Check if file appeared
         if response_file.exists():
             break
-        print(f"  Waiting for {response_file.name}...", end="\r", flush=True)
+        cprint(f"  Waiting for {response_file.name}...", end="\r", flush=True)
 
     if response_file.exists():
         try:
             result = json.loads(response_file.read_text())
-            print(f"[patcher] {cve_id} → manual patch loaded")
+            cprint(f"[patcher] {cve_id} → manual patch loaded")
             return result
         except Exception as e:
-            print(f"[patcher] {cve_id} — invalid JSON: {e}")
+            cprint(f"[patcher] {cve_id} — invalid JSON: {e}")
     return None
 
 
@@ -463,7 +464,7 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
     """
     req_file = _find_requirements_file(repo_path)
     if not req_file:
-        print("[patcher] No requirements.txt or pyproject.toml found — skipping dep bump")
+        cprint("[patcher] No requirements.txt or pyproject.toml found — skipping dep bump")
         return None
 
     original_content = req_file.read_text()
@@ -492,7 +493,7 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
             bumps[pkg][1].append(cve_id)
 
     if not bumps:
-        print("[patcher] No version constraints found in CVE data — skipping dep bump")
+        cprint("[patcher] No version constraints found in CVE data — skipping dep bump")
         return None
 
     # Validate safe versions exist on PyPI — clamp to latest published if not
@@ -500,7 +501,7 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
         safe_ver, cve_ids = bumps[pkg]
         actual = _clamp_to_pypi(pkg, safe_ver)
         if actual != safe_ver:
-            print(f"[patcher] {pkg}: safe version {safe_ver} not on PyPI — clamped to {actual}")
+            cprint(f"[patcher] {pkg}: safe version {safe_ver} not on PyPI — clamped to {actual}")
         bumps[pkg] = (actual, cve_ids)
 
     # Rewrite requirements lines
@@ -531,12 +532,12 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
             new_lines.append(new_line)
             already_written.add(pkg_name)
             changed.append((pkg_name, safe_ver, unique_cves))
-            print(f"[patcher] Bumping {pkg_name} → >={safe_ver} ({len(unique_cves)} CVEs)")
+            cprint(f"[patcher] Bumping {pkg_name} → >={safe_ver} ({len(unique_cves)} CVEs)")
         else:
             new_lines.append(line)
 
     if not changed:
-        print("[patcher] No matching packages found in requirements file")
+        cprint("[patcher] No matching packages found in requirements file")
         return None
 
     new_content = "\n".join(new_lines) + "\n"
@@ -550,8 +551,8 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
     diff = _generate_diff(original_content, new_content, "a/requirements.txt", "b/requirements.txt")
     (pd / "requirements.patch").write_text(diff)
 
-    print(f"[patcher] Dep bump written → {out_path}")
-    print(f"[patcher] Diff written     → {pd}/requirements.patch")
+    cprint(f"[patcher] Dep bump written → {out_path}")
+    cprint(f"[patcher] Diff written     → {pd}/requirements.patch")
 
     return {
         "file":    str(out_path),
@@ -614,20 +615,20 @@ def print_patch_summary(result: dict):
     code_patches = result.get("code_patches", [])
     dep_bump     = result.get("dep_bump")
 
-    print(f"\n[patcher] ── Patch Output ──")
+    cprint(f"\n[patcher] ── Patch Output ──")
 
     if code_patches:
-        print(f"\n  Code patches ({len(code_patches)}):")
+        cprint(f"\n  Code patches ({len(code_patches)}):")
         for p in code_patches:
-            print(f"    {p['cve_id']} → {p['patch_dir']}/")
+            cprint(f"    {p['cve_id']} → {p['patch_dir']}/")
     else:
-        print("  No code patches (no confirmed exploitable CVEs)")
+        cprint("  No code patches (no confirmed exploitable CVEs)")
 
     if dep_bump:
-        print(f"\n  Dep bump → {dep_bump['file']}")
+        cprint(f"\n  Dep bump → {dep_bump['file']}")
         for pkg, ver, cves in dep_bump["changed"]:
-            print(f"    {pkg} → >={ver}  ({', '.join(cves)})")
+            cprint(f"    {pkg} → >={ver}  ({', '.join(cves)})")
     else:
-        print("  No dep bump generated")
+        cprint("  No dep bump generated")
 
-    print(f"\n  Next: run tests → verifier → github PR")
+    cprint(f"\n  Next: run tests → verifier → github PR")

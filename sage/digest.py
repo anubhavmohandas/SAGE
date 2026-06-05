@@ -38,6 +38,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from sage.utils.colors import cprint
 
 # Force API mode before any analyzer import — digest is always non-interactive
 os.environ.setdefault("SAGE_API_MODE", "1")
@@ -91,8 +92,8 @@ def run_digest(repo_paths: list[str], days: int = 1) -> int:
     Returns exit code: 0 = clean, 1 = CVEs found / PRs raised, 2 = error.
     """
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    print(_c(_box(f"SAGE Morning Digest — {date_str}"), BOLD, PURPLE))
-    print()
+    cprint(_c(_box(f"SAGE Morning Digest — {date_str}"), BOLD, PURPLE))
+    cprint()
 
     total_cves   = 0
     total_prs    = 0
@@ -111,7 +112,7 @@ def run_digest(repo_paths: list[str], days: int = 1) -> int:
         _print_repo_summary(r)
 
     # Final line
-    print()
+    cprint()
     status_icon = "✓" if total_errors == 0 else "⚠"
     parts = [
         f"{len(repo_paths)} repo{'s' if len(repo_paths) != 1 else ''} scanned",
@@ -125,10 +126,10 @@ def run_digest(repo_paths: list[str], days: int = 1) -> int:
     width   = max(56, len(summary) + 2)
     line    = "═" * width
     color   = GREEN if total_errors == 0 and total_cves == 0 else (RED if total_errors else YELLOW)
-    print(_c(f"╔{line}╗", color))
-    print(_c(f"║{summary.center(width)}║", color, BOLD))
-    print(_c(f"╚{line}╝", color))
-    print()
+    cprint(_c(f"╔{line}╗", color))
+    cprint(_c(f"║{summary.center(width)}║", color, BOLD))
+    cprint(_c(f"╚{line}╝", color))
+    cprint()
 
     return 0 if total_errors == 0 else 2
 
@@ -246,20 +247,20 @@ def _print_repo_summary(r: dict):
     repo_name = r.get("repo_name", r.get("repo_path", "unknown"))
     repo_path = r.get("repo_path", "")
 
-    print(_c(f"Repo: {repo_path}", BOLD) + _c(f"  ({repo_name})", DIM))
-    print("─" * 56)
+    cprint(_c(f"Repo: {repo_path}", BOLD) + _c(f"  ({repo_name})", DIM))
+    cprint("─" * 56)
 
     if r.get("error"):
-        print(_c(f"  ✗  Pipeline error: {r['error']}", RED))
+        cprint(_c(f"  ✗  Pipeline error: {r['error']}", RED))
         # Print traceback dimmed for log files
         for line in r.get("traceback", "").splitlines():
-            print(_c(f"     {line}", DIM))
-        print()
+            cprint(_c(f"     {line}", DIM))
+        cprint()
         return
 
     if r.get("skipped"):
-        print(_c(f"  –  Skipped: {r.get('skip_reason', 'unknown')}", DIM))
-        print()
+        cprint(_c(f"  –  Skipped: {r.get('skip_reason', 'unknown')}", DIM))
+        cprint()
         return
 
     cve_count  = r.get("cve_count", 0)
@@ -267,7 +268,7 @@ def _print_repo_summary(r: dict):
     cves       = r.get("cves", [])
 
     if cve_count == 0:
-        print(_c("  ✓  No CVEs found — stack looks clean", GREEN))
+        cprint(_c("  ✓  No CVEs found — stack looks clean", GREEN))
     else:
         # Count by severity
         by_sev: dict[str, list] = {}
@@ -275,7 +276,7 @@ def _print_repo_summary(r: dict):
             sev = c.get("severity", "UNKNOWN")
             by_sev.setdefault(sev, []).append(c)
 
-        print(f"  CVEs found: {_c(str(cve_count), BOLD)}")
+        cprint(f"  CVEs found: {_c(str(cve_count), BOLD)}")
         for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]:
             group = by_sev.get(sev, [])
             if not group:
@@ -286,7 +287,7 @@ def _print_repo_summary(r: dict):
                 pkg     = c.get("package", "")
                 is_conf = any(x.get("cve_id") == cve_id for x in confirmed)
                 conf_tag = _c("  [CONFIRMED EXPLOITABLE]", RED) if is_conf else ""
-                print(f"    {_c(f'{sev:8s}', color)}  {cve_id}  →  {pkg}{conf_tag}")
+                cprint(f"    {_c(f'{sev:8s}', color)}  {cve_id}  →  {pkg}{conf_tag}")
 
     # Patch summary
     if r.get("dep_bump") or r.get("code_patches", 0) > 0:
@@ -295,22 +296,22 @@ def _print_repo_summary(r: dict):
             patches.append("dep bump")
         if r.get("code_patches", 0) > 0:
             patches.append(f"{r['code_patches']} code patch(es)")
-        print(f"\n  Patches generated: {', '.join(patches)}")
+        cprint(f"\n  Patches generated: {', '.join(patches)}")
 
     # PR
     if r.get("pr_url"):
-        print(f"  PR raised:   {_c(r['pr_url'], CYAN, BOLD)}")
+        cprint(f"  PR raised:   {_c(r['pr_url'], CYAN, BOLD)}")
     elif r.get("pr_skip") and r.get("pr_reason"):
         reason = r["pr_reason"]
         if "already patched" in reason.lower():
-            print(_c(f"  PR skipped:  {reason}", DIM))
+            cprint(_c(f"  PR skipped:  {reason}", DIM))
         elif cve_count > 0:
-            print(_c(f"  PR skipped:  {reason}", YELLOW))
+            cprint(_c(f"  PR skipped:  {reason}", YELLOW))
 
     # Test / verify flags
     if not r.get("tests_passed", True):
-        print(_c("  ⚠  Tests failing — PR raised as draft", YELLOW))
+        cprint(_c("  ⚠  Tests failing — PR raised as draft", YELLOW))
     if not r.get("verify_passed", True):
-        print(_c("  ⚠  Semgrep verification failed", YELLOW))
+        cprint(_c("  ⚠  Semgrep verification failed", YELLOW))
 
-    print()
+    cprint()

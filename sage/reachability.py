@@ -37,6 +37,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 import networkx as nx
+from sage.utils.colors import cprint
 
 
 # Max depth for caller traversal — prevents infinite loops in recursive code
@@ -302,23 +303,23 @@ def _classify_entry(fn_node: str, G_rev: nx.DiGraph) -> Optional[str]:
 def print_reachability_summary(results: list[dict]):
     """Print a concise reachability summary table."""
     reachable = [r for r in results if r["reachable"]]
-    print(f"\n[reach] ── Reachability Analysis ──")
-    print(f"  CVEs analyzed:   {len(results)}")
-    print(f"  Reachable:       {len(reachable)}")
+    cprint(f"\n[reach] ── Reachability Analysis ──")
+    cprint(f"  CVEs analyzed:   {len(results)}")
+    cprint(f"  Reachable:       {len(reachable)}")
 
     if not reachable:
-        print("  No reachable attack paths found.")
+        cprint("  No reachable attack paths found.")
         return
 
     for r in reachable:
         sev = r.get("severity", "?")
-        print(f"\n  {r['cve_id']}  [{sev}]  →  {r['package']}")
-        print(f"    Entry points: {r['entry_count']}  |  Shortest path: {r['max_depth']} hop(s)")
+        cprint(f"\n  {r['cve_id']}  [{sev}]  →  {r['package']}")
+        cprint(f"    Entry points: {r['entry_count']}  |  Shortest path: {r['max_depth']} hop(s)")
         for p in r["paths"][:3]:
             arrow = " → ".join(p["path"])
-            print(f"    [{p['entry_type']:14s}]  {arrow}")
+            cprint(f"    [{p['entry_type']:14s}]  {arrow}")
         if len(r["paths"]) > 3:
-            print(f"    ... and {len(r['paths']) - 3} more paths")
+            cprint(f"    ... and {len(r['paths']) - 3} more paths")
 
 
 def save_reachability(results: list[dict], output_path: str = ""):
@@ -330,4 +331,4 @@ def save_reachability(results: list[dict], output_path: str = ""):
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"[reach] Reachability saved → {p}")
+    cprint(f"[reach] Reachability saved → {p}")

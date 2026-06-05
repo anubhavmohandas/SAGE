@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Optional
 import networkx as nx
 from networkx.readwrite import json_graph
+from sage.utils.colors import cprint
 
 
 # Type → color mapping (matches synapse.html)
@@ -154,8 +155,8 @@ def export_graph(
     with open(out, "w") as f:
         json.dump(output, f, indent=2)
 
-    print(f"[export] synapse_graph.json written → {out}")
-    print(f"[export] {len(nodes)} nodes, {len(links)} edges")
+    cprint(f"[export] synapse_graph.json written → {out}")
+    cprint(f"[export] {len(nodes)} nodes, {len(links)} edges")
     _print_summary(G)
 
     # Auto-generate index.html with fresh data embedded
@@ -178,7 +179,7 @@ def _generate_index_html(graph_data: dict, output_dir: Path):
             break
 
     if not template:
-        print("[export] synapse.html template not found — skipping index.html generation")
+        cprint("[export] synapse.html template not found — skipping index.html generation")
         return
 
     html = template.read_text()
@@ -209,8 +210,8 @@ def _generate_index_html(graph_data: dict, output_dir: Path):
 
     index_path = demo_dir / "index.html"
     index_path.write_text(html)
-    print(f"[export] index.html generated → {index_path}")
-    print(f"[export] Open in browser: file://{index_path.resolve()}")
+    cprint(f"[export] index.html generated → {index_path}")
+    cprint(f"[export] Open in browser: file://{index_path.resolve()}")
 
 
 # Python stdlib modules — not security relevant, clutter the graph
@@ -268,7 +269,7 @@ def _filter_graph(G: nx.DiGraph) -> nx.DiGraph:
         if n.startswith("file:") and ("test" in n.lower() or "__init__" in n):
             G2.nodes[n]["is_test"] = True
 
-    print(f"[export] Filtered {len(to_remove)} stdlib libraries from graph")
+    cprint(f"[export] Filtered {len(to_remove)} stdlib libraries from graph")
     return G2
 
 
@@ -305,17 +306,17 @@ def _print_summary(G: nx.DiGraph):
         t = G.nodes[node_id].get("type", "unknown")
         type_counts[t] = type_counts.get(t, 0) + 1
 
-    print("[export] Graph summary:")
+    cprint("[export] Graph summary:")
     for t, count in sorted(type_counts.items()):
-        print(f"         {t:12s} {count}")
+        cprint(f"         {t:12s} {count}")
 
     # Show CVE summary
     cve_nodes = [n for n in G.nodes() if n.startswith("cve:")]
     if cve_nodes:
-        print(f"\n[export] CVEs in graph: {len(cve_nodes)}")
+        cprint(f"\n[export] CVEs in graph: {len(cve_nodes)}")
         by_severity = {}
         for cve_id in cve_nodes:
             sev = G.nodes[cve_id].get("severity", "UNKNOWN")
             by_severity[sev] = by_severity.get(sev, 0) + 1
         for sev, count in sorted(by_severity.items()):
-            print(f"         {sev:10s} {count}")
+            cprint(f"         {sev:10s} {count}")

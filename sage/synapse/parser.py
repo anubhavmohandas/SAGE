@@ -41,6 +41,7 @@ import os
 from pathlib import Path
 from typing import Optional
 import networkx as nx
+from sage.utils.colors import cprint
 
 # Try tree-sitter imports — explain clearly if missing
 try:
@@ -73,8 +74,8 @@ def parse_repo(repo_path: str) -> nx.DiGraph:
         "login_user CALLS requests" is directional — not the reverse.
     """
     if not TREE_SITTER_AVAILABLE:
-        print("[synapse] tree-sitter not installed. Run: pip3 install tree-sitter tree-sitter-python")
-        print("[synapse] Falling back to basic import scanning...")
+        cprint("[synapse] tree-sitter not installed. Run: pip3 install tree-sitter tree-sitter-python")
+        cprint("[synapse] Falling back to basic import scanning...")
         return _parse_repo_basic(repo_path)
 
     G = nx.DiGraph()
@@ -89,7 +90,7 @@ def parse_repo(repo_path: str) -> nx.DiGraph:
                    ["__pycache__", ".venv", "venv", "env", "node_modules", ".git"])
     ]
 
-    print(f"[synapse] Found {len(py_files)} Python files to parse")
+    cprint(f"[synapse] Found {len(py_files)} Python files to parse")
 
     # Set up tree-sitter Python parser
     PY_LANGUAGE = Language(tspython.language())
@@ -98,7 +99,7 @@ def parse_repo(repo_path: str) -> nx.DiGraph:
     for py_file in py_files:
         _parse_file(G, py_file, path, parser)
 
-    print(f"[synapse] Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    cprint(f"[synapse] Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G
 
 
@@ -123,7 +124,7 @@ def _parse_file(G: nx.DiGraph, file_path: Path, repo_root: Path, parser):
     try:
         source = file_path.read_bytes()
     except Exception as e:
-        print(f"[synapse] Could not read {rel_path}: {e}")
+        cprint(f"[synapse] Could not read {rel_path}: {e}")
         return
 
     # Parse with tree-sitter
@@ -311,7 +312,7 @@ def _parse_repo_basic(repo_path: str) -> nx.DiGraph:
         if not any(p in f.parts for p in ["__pycache__", "venv", ".venv"])
     ]
 
-    print(f"[synapse] Basic mode: scanning {len(py_files)} Python files for imports")
+    cprint(f"[synapse] Basic mode: scanning {len(py_files)} Python files for imports")
 
     import_re = re.compile(
         r"^(?:from\s+([\w.]+)\s+import|import\s+([\w.,\s]+))", re.MULTILINE
@@ -335,5 +336,5 @@ def _parse_repo_basic(repo_path: str) -> nx.DiGraph:
                     G.add_node(lib_id, id=lib_id, label=module, type="library")
                 G.add_edge(file_id, lib_id, label="IMPORTS")
 
-    print(f"[synapse] Basic graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    cprint(f"[synapse] Basic graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G

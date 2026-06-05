@@ -7,8 +7,8 @@ Nothing in SAGE imports keys directly — everything goes through this module.
 
 Usage:
     from sage.config import cfg
-    print(cfg.NVD_API_KEY)
-    print(cfg.data_dir())  # repo-scoped data directory
+    cprint(cfg.NVD_API_KEY)
+    cprint(cfg.data_dir())  # repo-scoped data directory
 
 Per-repo data isolation:
     Each scanned repo gets its own data subdirectory so that scanning
@@ -35,6 +35,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from dotenv import load_dotenv
+from sage.utils.colors import cprint
 
 # Load .env file into environment
 load_dotenv()
@@ -71,26 +72,26 @@ class Config:
                     self.GITHUB_REPO = cached
                     # Silent — user already decided
                 else:
-                    print(f"\n[SAGE] ── GitHub Repo Mismatch ──")
-                    print(f"  GITHUB_REPO in .env:  {self.GITHUB_REPO}")
-                    print(f"  Detected from remote: {detected}")
-                    print(f"  [1] Use detected ({detected})  [2] Keep .env value  [3] Enter manually")
+                    cprint(f"\n[SAGE] ── GitHub Repo Mismatch ──")
+                    cprint(f"  GITHUB_REPO in .env:  {self.GITHUB_REPO}")
+                    cprint(f"  Detected from remote: {detected}")
+                    cprint(f"  [1] Use detected ({detected})  [2] Keep .env value  [3] Enter manually")
                     choice = input("  Choice (1/2/3): ").strip()
                     if choice == "1":
                         self.GITHUB_REPO = detected
-                        print(f"  Using {detected}")
+                        cprint(f"  Using {detected}")
                     elif choice == "3":
                         val = input("  Enter owner/repo: ").strip()
                         if val:
                             self.GITHUB_REPO = val
-                            print(f"  Using {val}")
+                            cprint(f"  Using {val}")
                     else:
-                        print(f"  Keeping {self.GITHUB_REPO}")
+                        cprint(f"  Keeping {self.GITHUB_REPO}")
                     # Remember this choice
                     cache_file.write_text(self.GITHUB_REPO)
-                    print(f"  (Choice saved — won't ask again for {self._repo_name})")
+                    cprint(f"  (Choice saved — won't ask again for {self._repo_name})")
             else:
-                print(f"[SAGE] Auto-selecting GitHub repo: {detected} (detected from git remote)")
+                cprint(f"[SAGE] Auto-selecting GitHub repo: {detected} (detected from git remote)")
                 self.GITHUB_REPO = detected
 
     def data_dir(self, *subdirs: str) -> Path:
@@ -156,8 +157,8 @@ def load_config() -> Config:
         )
 
     if not NVD_API_KEY:
-        print("[SAGE] Warning: NVD_API_KEY not set. Rate limited to 5 requests/30s.")
-        print("[SAGE] Get a free key at: nvd.nist.gov/developers/request-an-api-key\n")
+        cprint("[SAGE] Warning: NVD_API_KEY not set. Rate limited to 5 requests/30s.")
+        cprint("[SAGE] Get a free key at: nvd.nist.gov/developers/request-an-api-key\n")
 
     return Config(
         NVD_API_KEY=NVD_API_KEY,

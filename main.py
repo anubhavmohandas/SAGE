@@ -19,7 +19,7 @@ import sys
 
 # Config loads first — fails fast if .env is missing keys
 from sage.config import cfg
-from sage.utils.colors import console, print_banner, log, log_success, log_fail, log_warn, print_pipeline_result
+from sage.utils.colors import console, print_banner, log, log_success, log_fail, log_warn, print_pipeline_result, cprint
 from sage.fetcher.nvd    import fetch_cves_since, fetch_cve_by_id
 from sage.fetcher.filter import detect_stack, filter_relevant_cves
 from sage.fetcher.npm    import fetch_npm_advisories
@@ -47,27 +47,27 @@ def run_fetch(repo_path: str, days: int = 1):
         4. Save new ones to DB
         5. Report what was found
     """
-    print(f"\n{'='*60}")
-    print(f"  SAGE — Security Analysis & Graph Engine")
-    print(f"  Repo: {repo_path}")
-    print(f"  Days: last {days} day(s)")
-    print(f"{'='*60}\n")
+    cprint(f"\n{'='*60}")
+    cprint(f"  SAGE — Security Analysis & Graph Engine")
+    cprint(f"  Repo: {repo_path}")
+    cprint(f"  Days: last {days} day(s)")
+    cprint(f"{'='*60}\n")
 
     # Set repo context — scopes all data/ paths to data/<repo_name>/
     cfg.set_repo(repo_path)
     init_db()  # must come after set_repo()
 
     # Step 1 — Detect repo stack
-    print("[SAGE] Step 1/4 — Detecting repo stack...")
+    cprint("[SAGE] Step 1/4 — Detecting repo stack...")
     stack = detect_stack(repo_path)
 
     if stack:
-        print(f"\n[SAGE] Detected {len(stack)} packages:")
+        cprint(f"\n[SAGE] Detected {len(stack)} packages:")
         for pkg, ver in sorted(stack.items()):
-            print(f"         {pkg:30s} {ver}")
+            cprint(f"         {pkg:30s} {ver}")
     else:
-        print("[SAGE] No dependencies found. Nothing to scan.")
-        print("[SAGE] Tip: SAGE works best on repos with requirements.txt or package.json")
+        cprint("[SAGE] No dependencies found. Nothing to scan.")
+        cprint("[SAGE] Tip: SAGE works best on repos with requirements.txt or package.json")
         return
 
     # Detect if this is a Node.js/JS repo
@@ -76,51 +76,51 @@ def run_fetch(repo_path: str, days: int = 1):
 
     # Step 2 — Fetch CVEs (NVD for Python, GHSA/npm-audit for JS)
     if is_js_repo:
-        print(f"\n[SAGE] Step 2/4 — Fetching npm advisories (last {days} day(s))...")
+        cprint(f"\n[SAGE] Step 2/4 — Fetching npm advisories (last {days} day(s))...")
         # JS repos: use GHSA + npm audit (no NVD key needed for npm packages)
         js_stack = {k: v for k, v in stack.items()}
         relevant = fetch_npm_advisories(js_stack, days=days)
         raw_cves = relevant  # already filtered by ecosystem
-        print(f"[SAGE] npm advisory fetch: {len(relevant)} advisories")
+        cprint(f"[SAGE] npm advisory fetch: {len(relevant)} advisories")
     else:
-        print(f"\n[SAGE] Step 2/4 — Fetching CVEs from NVD (last {days} day(s))...")
+        cprint(f"\n[SAGE] Step 2/4 — Fetching CVEs from NVD (last {days} day(s))...")
         raw_cves = fetch_cves_since(days=days)
 
         if not raw_cves:
-            print("[SAGE] No CVEs fetched. Check your internet connection or NVD API key.")
+            cprint("[SAGE] No CVEs fetched. Check your internet connection or NVD API key.")
             return
 
         # Step 3 — Filter to relevant CVEs
-        print(f"\n[SAGE] Step 3/4 — Filtering {len(raw_cves)} CVEs against your stack...")
+        cprint(f"\n[SAGE] Step 3/4 — Filtering {len(raw_cves)} CVEs against your stack...")
         relevant = filter_relevant_cves(raw_cves, stack)
 
     # Step 4 — Save to DB
-    print(f"\n[SAGE] Step 4/4 — Saving to database...")
+    cprint(f"\n[SAGE] Step 4/4 — Saving to database...")
     save_cves(relevant)
 
     # Report
-    print(f"\n{'='*60}")
-    print(f"  SAGE Fetch Complete")
-    print(f"{'='*60}")
+    cprint(f"\n{'='*60}")
+    cprint(f"  SAGE Fetch Complete")
+    cprint(f"{'='*60}")
     source = "npm advisories" if is_js_repo else "NVD"
-    print(f"  CVEs fetched from {source}:  {len(raw_cves)}")
-    print(f"  Relevant to your stack:    {len(relevant)}")
+    cprint(f"  CVEs fetched from {source}:  {len(raw_cves)}")
+    cprint(f"  Relevant to your stack:    {len(relevant)}")
     from sage.fetcher.store import _db_path
-    print(f"  Saved to DB:               {_db_path()}")
+    cprint(f"  Saved to DB:               {_db_path()}")
 
     if relevant:
-        print(f"\n  Relevant CVEs found:")
+        cprint(f"\n  Relevant CVEs found:")
         for entry in relevant:
             m = entry.get("sage_match", {})
-            print(f"    [{m.get('severity', '?'):8s}] {m.get('cve_id', '?')} "
+            cprint(f"    [{m.get('severity', '?'):8s}] {m.get('cve_id', '?')} "
                   f"→ {m.get('package', '?')} {m.get('installed_version', '?')}")
     else:
-        print(f"\n  No relevant CVEs found. Stack looks clean for this period.")
+        cprint(f"\n  No relevant CVEs found. Stack looks clean for this period.")
 
     # Always build the graph — it's a live map of the codebase.
     # CVEs are overlaid on top if present; graph exists regardless.
-    print(f"\n  Building Synapse knowledge graph...")
-    print(f"{'='*60}\n")
+    cprint(f"\n  Building Synapse knowledge graph...")
+    cprint(f"{'='*60}\n")
     run_synapse(repo_path)
 
 
@@ -154,7 +154,7 @@ def run_synapse(repo_path: str):
     # Blast radius table
     cve_nodes = [n for n in G.nodes() if n.startswith("cve:")]
     if cve_nodes:
-        from sage.utils.colors import print_blast_table
+        from sage.utils.colors import print_blast_table, cprint
         blasts = []
         for cve_node in cve_nodes[:10]:
             blast = get_blast_radius(G, cve_node)
@@ -232,25 +232,25 @@ def run_synapse(repo_path: str):
 
 def run_single_cve(cve_id: str):
     """Look up and display a single CVE by ID."""
-    print(f"\n[SAGE] Looking up {cve_id}...")
+    cprint(f"\n[SAGE] Looking up {cve_id}...")
     entry = fetch_cve_by_id(cve_id)
 
     if not entry:
-        print(f"[SAGE] CVE {cve_id} not found.")
+        cprint(f"[SAGE] CVE {cve_id} not found.")
         return
 
     cve = entry.get("cve", {})
-    print(f"\n  ID:          {cve.get('id')}")
-    print(f"  Published:   {cve.get('published', 'N/A')[:10]}")
+    cprint(f"\n  ID:          {cve.get('id')}")
+    cprint(f"  Published:   {cve.get('published', 'N/A')[:10]}")
 
     # Description
     descs = cve.get("descriptions", [])
     for d in descs:
         if d.get("lang") == "en":
-            print(f"  Description: {d.get('value', '')[:200]}...")
+            cprint(f"  Description: {d.get('value', '')[:200]}...")
             break
 
-    print(f"\n  Full JSON saved to: cve_{cve_id}.json")
+    cprint(f"\n  Full JSON saved to: cve_{cve_id}.json")
     with open(f"cve_{cve_id}.json", "w") as f:
         json.dump(entry, f, indent=2)
 
@@ -258,15 +258,15 @@ def run_single_cve(cve_id: str):
 def run_status():
     """Show pipeline status summary."""
     summary = get_summary()
-    print(f"\n{'='*60}")
-    print(f"  SAGE — Pipeline Status")
-    print(f"{'='*60}")
+    cprint(f"\n{'='*60}")
+    cprint(f"  SAGE — Pipeline Status")
+    cprint(f"{'='*60}")
     if not summary:
-        print("  No CVEs in database yet. Run: python main.py --repo <path>")
+        cprint("  No CVEs in database yet. Run: python main.py --repo <path>")
     else:
         for status, count in sorted(summary.items()):
-            print(f"  {status:15s} {count}")
-    print(f"{'='*60}\n")
+            cprint(f"  {status:15s} {count}")
+    cprint(f"{'='*60}\n")
 
 
 def main():
@@ -308,5 +308,5 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n[SAGE] Interrupted — exiting cleanly.")
+        cprint("\n\n[SAGE] Interrupted — exiting cleanly.")
         sys.exit(0)
