@@ -293,7 +293,7 @@ def filter_relevant_cves(raw_cves: list[dict], stack: dict[str, str]) -> list[di
     # Debug: show what package names NVD actually uses
     # so we can tune our matching if 0 results come back
     if len(relevant) == 0 and raw_cves:
-        cprint("[filter] Debug — sampling CPE names from first 50 CVEs:")
+        cprint("[filter] Debug — 0 matches. Sampling CPE products from first 50 CVEs to diagnose:")
         seen = set()
         for entry in raw_cves[:50]:
             cve = entry.get("cve", {})
@@ -307,12 +307,30 @@ def filter_relevant_cves(raw_cves: list[dict], stack: dict[str, str]) -> list[di
                             key = f"{vendor}:{product}"
                             if key not in seen:
                                 seen.add(key)
-        # Check if any of our packages appear in the CPE names
-        stack_names = list(raw_cves[0].keys()) if raw_cves else []
+
+        # Show which stack packages appear (or don't) in the CPE sample
+        stack_found = {}
+        stack_missing = []
         for pkg in stack.keys():
-            matches = [k for k in seen if pkg.replace("_","-") in k or pkg in k]
+            pkg_norm = pkg.replace("_", "-")
+            matches = [k for k in seen if pkg_norm in k or pkg in k]
             if matches:
-                cprint(f"[filter]   '{pkg}' found in CPEs: {matches[:3]}")
+                stack_found[pkg] = matches[:3]
+            else:
+                stack_missing.append(pkg)
+
+        if stack_found:
+            cprint("[filter]   Stack packages found in CPE sample (alias may be wrong):")
+            for pkg, hits in stack_found.items():
+                cprint(f"[filter]     '{pkg}' appears as: {hits}")
+        else:
+            cprint("[filter]   None of your stack packages appear in this CPE sample.")
+            cprint(f"[filter]   Your stack: {sorted(stack.keys())}")
+            cprint(f"[filter]   This likely means NVD had no CVEs for these packages")
+            cprint(f"[filter]   in the requested time window — not a bug.")
+            if seen:
+                sample = sorted(seen)[:20]
+                cprint(f"[filter]   CPE products seen (first 20): {sample}")
 
     return relevant
 
@@ -422,7 +440,7 @@ def _names_match(cpe_name: str, pkg_name: str) -> bool:
         "dnspython":      {"dnspython", "dnspython_dnspython"},
         "python_dotenv":  {"python_dotenv", "python-dotenv", "dotenv"},
         "python_whois":   {"python_whois", "python-whois"},
-        "phonenumbers":   {"phonenumbers", "googlei18n_libphonenumber"},
+        "phonenumbers":   {"phonenumbers", "googlei18n_libphonenumber", "libphonenumber"},
         "anthropic":      {"anthropic", "anthropic_sdk", "anthropic-sdk",
                            "anthropic_python_sdk", "anthropic_inc_anthropic"},
         "pygithub":       {"pygithub", "pygithub_pygithub", "github"},
