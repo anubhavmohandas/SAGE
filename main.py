@@ -19,7 +19,7 @@ import sys
 
 # Config loads first — fails fast if .env is missing keys
 from sage.config import cfg
-from sage.utils.colors import console, print_banner, log, log_success, log_fail, log_warn, print_pipeline_result, cprint
+from sage.utils.colors import console, print_banner, log, log_success, log_fail, log_warn, print_pipeline_result, cprint, print_made_by
 from sage.fetcher.nvd    import fetch_cves_since, fetch_cve_by_id
 from sage.fetcher.filter import detect_stack, filter_relevant_cves
 from sage.fetcher.npm    import fetch_npm_advisories
@@ -47,6 +47,7 @@ def run_fetch(repo_path: str, days: int = 1):
         4. Save new ones to DB
         5. Report what was found
     """
+    print_made_by()
     cprint(f"\n{'='*60}")
     cprint(f"  SAGE — Security Analysis & Graph Engine")
     cprint(f"  Repo: {repo_path}")
@@ -132,6 +133,7 @@ def run_synapse(repo_path: str):
     # Set repo context first — all data paths scope to data/<repo_name>/
     cfg.set_repo(repo_path)
     init_db()  # must come after set_repo() so DB lands in data/<repo_name>/
+    print_made_by()
     print_banner("SYNAPSE — Knowledge Graph Builder")
 
     log("SAGE", "Synapse Step 1/4 — Parsing codebase...")
@@ -228,6 +230,7 @@ def run_synapse(repo_path: str):
     )
     save_pr_result(pr_result)
     print_pr_summary(pr_result)
+    print_made_by()
 
 
 def run_single_cve(cve_id: str):

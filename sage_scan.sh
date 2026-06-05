@@ -30,6 +30,9 @@ echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════╗${RESET}"
 echo -e "${BOLD}${CYAN}║   SAGE — Security Analysis & Graph Engine    ║${RESET}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════╝${RESET}"
+# Gradient "Made by Anubhav" using ANSI 256-color escape codes
+# Colors: purple(93) → blue(63) → cyan(51) → light-cyan(159)
+printf "        \033[38;5;93m⚡\033[0m \033[38;5;93mM\033[38;5;99ma\033[38;5;63md\033[38;5;27me\033[38;5;33m \033[38;5;39mb\033[38;5;45my\033[38;5;51m \033[38;5;87mA\033[38;5;123mn\033[38;5;159mu\033[38;5;195mb\033[38;5;231mh\033[38;5;195ma\033[38;5;159mv\033[0m\n"
 echo ""
 
 # ── Step 1: Get repo path ─────────────────────────────────────────────────────

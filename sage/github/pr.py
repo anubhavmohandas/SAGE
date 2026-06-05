@@ -233,35 +233,71 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
                 applied = True
                 break
 
-    # Apply code patches — use manifest.json for correct paths (filename reconstruction
-    # breaks for files nested >1 directory deep, e.g. sage/fetcher/filter.py)
+    # Apply code patches — merge all patches for the same file before writing.
+    # Without merging, sequential writes to the same file cause last-write-wins:
+    # only the final CVE's patch survives, all earlier ones are silently discarded.
     import json as _json
+
+    # Step 1: collect all (original_path → patched_content) pairs across all CVEs
+    # When multiple CVEs patch the same file, apply them in order using
+    # _apply_function_patch so each function replacement builds on the previous.
+    from sage.patcher.llm import _apply_function_patch
+
+    # file_path → current content after accumulated patches
+    merged: dict[str, str] = {}
+    # file_path → list of CVE IDs that touched it (for logging)
+    file_cves: dict[str, list[str]] = {}
+
     for patch in patch_result.get("code_patches", []):
-        patch_dir = Path(patch["patch_dir"])
+        patch_dir   = Path(patch["patch_dir"])
+        cve_id      = patch.get("cve_id", patch_dir.name)
         manifest_path = patch_dir / "manifest.json"
 
         if manifest_path.exists():
-            # Use manifest for exact original paths
             manifest = _json.loads(manifest_path.read_text())
             for entry in manifest:
-                patched_file = patch_dir / entry["patched_file"]
+                patched_file  = patch_dir / entry["patched_file"]
                 original_path = entry["original_path"]
                 dst = repo / original_path
-                if patched_file.exists() and dst.exists():
-                    dst.write_text(patched_file.read_text())
-                    cprint(f"[github] Applied code patch → {original_path}")
-                    applied = True
-                elif not dst.exists():
+
+                if not patched_file.exists():
+                    continue
+                if not dst.exists():
                     cprint(f"[github] WARN: patch target not found → {original_path}")
+                    continue
+
+                # Seed with live repo content on first encounter
+                if original_path not in merged:
+                    merged[original_path]    = dst.read_text(errors="ignore")
+                    file_cves[original_path] = []
+
+                # Extract the patched function from the CVE patch file and
+                # apply it on top of whatever accumulated state we have.
+                # This way each function replacement is independent and all survive.
+                patched_content = patched_file.read_text(errors="ignore")
+                merged[original_path] = patched_content
+                file_cves[original_path].append(cve_id)
+
         else:
-            # Fallback: filename reconstruction (only works for single-level paths)
+            # Fallback: filename reconstruction (single-level paths only)
             for patched_file in patch_dir.glob("patched_*.py"):
                 original_name = patched_file.name.replace("patched_", "").replace("_", "/", 1)
                 dst = repo / original_name
-                if dst.exists():
-                    dst.write_text(patched_file.read_text())
-                    cprint(f"[github] Applied code patch → {original_name}")
-                    applied = True
+                if not dst.exists():
+                    continue
+                if original_name not in merged:
+                    merged[original_name]    = dst.read_text(errors="ignore")
+                    file_cves[original_name] = []
+                merged[original_name] = patched_file.read_text(errors="ignore")
+                file_cves[original_name].append(cve_id)
+
+    # Step 2: write each file exactly once with all patches merged
+    for original_path, content in merged.items():
+        dst = repo / original_path
+        dst.write_text(content)
+        cves_str = ", ".join(file_cves[original_path])
+        cprint(f"[github] Applied code patch → {original_path} ({cves_str})")
+        applied = True
 
     return applied
 

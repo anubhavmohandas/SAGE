@@ -150,6 +150,42 @@ def print_pipeline_result(passed: bool, msg: str):
     console.print(f"\n  [{style}]{icon} {msg}[/{style}]")
 
 
+# ─── Made by Anubhav footer ──────────────────────────────────────────────────
+
+def print_made_by():
+    """
+    Gradient 'Made by Anubhav' footer — shown at pipeline start/end.
+    Gradient: deep purple → cyan → near-white.
+    Degrades gracefully on dumb terminals (rich catches exceptions internally).
+    """
+    from rich.text import Text
+    from rich.align import Align
+
+    gradient = [
+        (138, 43, 226),
+        (99,   0, 255),
+        (0,   80, 255),
+        (0,  160, 240),
+        (0,  210, 210),
+        (100, 230, 230),
+        (200, 240, 255),
+    ]
+    label = "  ⚡ Made by Anubhav  "
+    t = Text()
+    n = len(gradient)
+    for i, ch in enumerate(label):
+        idx = min(int(i / len(label) * n), n - 1)
+        r, g, b = gradient[idx]
+        t.append(ch, style=f"rgb({r},{g},{b}) bold")
+
+    try:
+        console.print()
+        console.print(Align.center(t))
+        console.print()
+    except Exception:
+        print("\n  ⚡ Made by Anubhav\n")
+
+
 # ─── Smart color print — drop-in replacement for print() ─────────────────────
 # Import this as `from sage.utils.colors import cprint` and use instead of print().
 # Automatically applies color based on message content — no code changes needed.
