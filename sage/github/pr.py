@@ -258,7 +258,13 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
             for entry in manifest:
                 patched_file  = patch_dir / entry["patched_file"]
                 original_path = entry["original_path"]
-                dst = repo / original_path
+
+                # Security: verify original_path from manifest stays inside repo root
+                repo_root = repo.resolve()
+                dst = (repo_root / original_path).resolve()
+                if not str(dst).startswith(str(repo_root) + "/") and dst != repo_root:
+                    cprint(f"[github] SECURITY: manifest path {original_path!r} escapes repo root — skipping")
+                    continue
 
                 if not patched_file.exists():
                     continue
@@ -292,8 +298,12 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
                 file_cves[original_name].append(cve_id)
 
     # Step 2: write each file exactly once with all patches merged
+    repo_root = repo.resolve()
     for original_path, content in merged.items():
-        dst = repo / original_path
+        dst = (repo_root / original_path).resolve()
+        if not str(dst).startswith(str(repo_root) + "/"):
+            cprint(f"[github] SECURITY: refusing to write outside repo root: {original_path!r}")
+            continue
         dst.write_text(content)
         cves_str = ", ".join(file_cves[original_path])
         cprint(f"[github] Applied code patch → {original_path} ({cves_str})")

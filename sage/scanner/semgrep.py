@@ -109,50 +109,122 @@ CWE_TO_RULES = {
 }
 
 # Library-specific rule packs — run ON TOP of CWE rules
+# Covers Python and JS/TS packages
 LIBRARY_RULES = {
-    # Web frameworks
+    # ── Python: Web frameworks ────────────────────────────────────────────────
     "aiohttp":      ["p/aiohttp"],
     "flask":        ["p/flask"],
     "django":       ["p/django"],
     "fastapi":      ["p/security-audit"],
     "starlette":    ["p/security-audit"],
     "tornado":      ["p/security-audit"],
-    # HTTP clients
+    # ── Python: HTTP clients ──────────────────────────────────────────────────
     "requests":     ["p/ssrf"],
     "httpx":        ["p/ssrf"],
     "urllib3":      ["p/ssrf"],
     "httplib2":     ["p/ssrf"],
-    # Database
+    # ── Python: Database ──────────────────────────────────────────────────────
     "sqlalchemy":   ["p/sql-injection"],
     "pymongo":      ["p/security-audit"],
     "redis":        ["p/security-audit"],
     "psycopg2":     ["p/sql-injection"],
     "pymysql":      ["p/sql-injection"],
-    # Auth / Crypto
+    # ── Python: Auth / Crypto ─────────────────────────────────────────────────
     "jwt":          ["p/jwt"],
     "pyjwt":        ["p/jwt"],
     "cryptography": ["p/cryptography"],
     "paramiko":     ["p/security-audit"],
     "pyopenssl":    ["p/cryptography"],
-    # Parsing / Serialization
+    # ── Python: Parsing / Serialization ──────────────────────────────────────
     "pyyaml":       ["p/deserialization"],
     "yaml":         ["p/deserialization"],
     "pickle":       ["p/deserialization"],
     "lxml":         ["p/security-audit"],
     "xmltodict":    ["p/security-audit"],
-    # DNS / Network
+    # ── Python: DNS / Network ─────────────────────────────────────────────────
     "dnspython":    ["p/regex"],
     "scapy":        ["p/security-audit"],
-    # Shell / Process
+    # ── Python: Shell / Process ───────────────────────────────────────────────
     "subprocess":   ["p/command-injection"],
     "os":           ["p/command-injection"],
     "shlex":        ["p/command-injection"],
-    # Template engines
+    # ── Python: Template engines ──────────────────────────────────────────────
     "jinja2":       ["p/xss"],
     "mako":         ["p/xss"],
+
+    # ── JS/TS: Web frameworks ─────────────────────────────────────────────────
+    "express":      ["p/express", "p/security-audit"],
+    "koa":          ["p/security-audit"],
+    "hapi":         ["p/security-audit"],
+    "fastify":      ["p/security-audit"],
+    "next":         ["p/nextjs", "p/security-audit"],
+    "nuxt":         ["p/security-audit"],
+    # ── JS/TS: HTTP clients ───────────────────────────────────────────────────
+    "axios":        ["p/ssrf"],
+    "node_fetch":   ["p/ssrf"],
+    "got":          ["p/ssrf"],
+    "superagent":   ["p/ssrf"],
+    "request":      ["p/ssrf"],
+    # ── JS/TS: Database ───────────────────────────────────────────────────────
+    "mongoose":     ["p/nosql-injection", "p/security-audit"],
+    "sequelize":    ["p/sql-injection"],
+    "pg":           ["p/sql-injection"],
+    "mysql2":       ["p/sql-injection"],
+    "mysql":        ["p/sql-injection"],
+    "knex":         ["p/sql-injection"],
+    "typeorm":      ["p/sql-injection"],
+    # ── JS/TS: Auth / Crypto ──────────────────────────────────────────────────
+    "jsonwebtoken": ["p/jwt"],
+    "passport":     ["p/security-audit"],
+    "bcrypt":       ["p/security-audit"],
+    "bcryptjs":     ["p/security-audit"],
+    "crypto":       ["p/cryptography"],
+    # ── JS/TS: Parsing / Serialization ────────────────────────────────────────
+    "serialize_javascript": ["p/deserialization"],
+    "node_serialize":       ["p/deserialization"],
+    "js_yaml":      ["p/deserialization"],
+    "xml2js":       ["p/security-audit"],
+    "fast_xml_parser": ["p/security-audit"],
+    # ── JS/TS: Template engines / XSS surface ────────────────────────────────
+    "handlebars":   ["p/xss"],
+    "ejs":          ["p/xss"],
+    "pug":          ["p/xss"],
+    "mustache":     ["p/xss"],
+    "marked":       ["p/xss"],
+    "dompurify":    ["p/xss"],
+    # ── JS/TS: Shell / Process ────────────────────────────────────────────────
+    "child_process": ["p/command-injection"],
+    "shelljs":      ["p/command-injection"],
+    "execa":        ["p/command-injection"],
+    # ── JS/TS: File / Path ────────────────────────────────────────────────────
+    "multer":       ["p/path-traversal", "p/security-audit"],
+    "formidable":   ["p/path-traversal", "p/security-audit"],
+    # ── JS/TS: Networking / WebSocket ────────────────────────────────────────
+    "socket_io":    ["p/security-audit"],
+    "ws":           ["p/security-audit"],
+    # ── JS/TS: Input validation / Sanitization ────────────────────────────────
+    "validator":    ["p/security-audit"],
+    "joi":          ["p/security-audit"],
+    "yup":          ["p/security-audit"],
 }
 
-DEFAULT_RULES = ["p/python", "p/security-audit", "p/owasp-top-ten"]
+# Language-specific default rule packs
+# Used when no CWE-specific or library-specific rules apply
+DEFAULT_RULES_PYTHON = ["p/python", "p/security-audit", "p/owasp-top-ten"]
+DEFAULT_RULES_JS     = ["p/javascript", "p/security-audit", "p/owasp-top-ten"]
+DEFAULT_RULES_TS     = ["p/typescript", "p/security-audit", "p/owasp-top-ten"]
+
+# File extension → default rule set
+_EXT_TO_DEFAULTS = {
+    ".py":  DEFAULT_RULES_PYTHON,
+    ".js":  DEFAULT_RULES_JS,
+    ".jsx": DEFAULT_RULES_JS,
+    ".ts":  DEFAULT_RULES_TS,
+    ".tsx": DEFAULT_RULES_TS,
+}
+
+# Keep for backward compat if anything else imports it
+DEFAULT_RULES = DEFAULT_RULES_PYTHON
 
 
 def scan_blast_radius(G, repo_path: str) -> list[dict]:
@@ -208,24 +280,31 @@ def scan_blast_radius(G, repo_path: str) -> list[dict]:
         node_data = G.nodes[cve_node]
         cwe = node_data.get("cwe", "") or _extract_cwe(node_data.get("info", ""))
 
-        # Pick rules: CWE-based + library-specific, deduplicated
-        rules = list(CWE_TO_RULES.get(cwe, DEFAULT_RULES))
+        # CWE-based rules (language-agnostic — applied per file with ext check)
+        cwe_rules = CWE_TO_RULES.get(cwe, [])  # empty = use lang defaults
 
-        # Add library-specific rules on top
+        # Library-specific rules on top of CWE rules
         affected_lib = blast.get("affected_library", "")
         lib_rules = LIBRARY_RULES.get(affected_lib, [])
-        for r in lib_rules:
-            if r not in rules:
-                rules.append(r)
 
         cprint(f"[scanner] {cve_id} ({cwe or 'no CWE'}) → "
-              f"{len(exposed_files)} files, lib={affected_lib} → rules: {rules}")
+               f"{len(exposed_files)} files, lib={affected_lib}")
 
-        # Run Semgrep on each exposed file
+        # Run Semgrep on each exposed file — pick rules per file extension
         for rel_file in exposed_files:
             abs_file = os.path.join(repo_path, rel_file)
             if not os.path.exists(abs_file):
                 continue
+
+            ext = Path(rel_file).suffix.lower()
+            lang_defaults = _EXT_TO_DEFAULTS.get(ext, DEFAULT_RULES_PYTHON)
+
+            # Merge: CWE rules (or lang defaults) + lib rules, deduplicated
+            base = cwe_rules if cwe_rules else lang_defaults
+            rules = list(base)
+            for r in lib_rules:
+                if r not in rules:
+                    rules.append(r)
 
             findings = _run_semgrep(abs_file, rules, cve_id)
             all_findings.extend(findings)

@@ -87,8 +87,9 @@ class Config:
                             cprint(f"  Using {val}")
                     else:
                         cprint(f"  Keeping {self.GITHUB_REPO}")
-                    # Remember this choice
+                    # Remember this choice — 0o600: owner read/write only (contains repo name)
                     cache_file.write_text(self.GITHUB_REPO)
+                    cache_file.chmod(0o600)
                     cprint(f"  (Choice saved — won't ask again for {self._repo_name})")
             else:
                 cprint(f"[SAGE] Auto-selecting GitHub repo: {detected} (detected from git remote)")

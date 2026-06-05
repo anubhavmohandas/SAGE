@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from sage.scanner.semgrep import CWE_TO_RULES
+from sage.scanner.semgrep import CWE_TO_RULES, _EXT_TO_DEFAULTS, DEFAULT_RULES_PYTHON
 from sage.utils.colors import cprint
 
 
@@ -126,8 +126,11 @@ def _verify_code_patch(cve_id: str, cwe: str, patch_dir: Path) -> dict:
       1. CWE-specific rule no longer fires (fix worked)
       2. No new issues introduced (patch is safe)
     """
-    # Find patched files in the patch directory
-    patched_files = list(patch_dir.glob("patched_*.py"))
+    # Find patched files — any supported language extension
+    _PATCHED_EXTS = ("*.py", "*.js", "*.jsx", "*.ts", "*.tsx")
+    patched_files = []
+    for pat in _PATCHED_EXTS:
+        patched_files.extend(patch_dir.glob(f"patched_{pat[1:]}"))  # e.g. patched_*.py
     if not patched_files:
         return {
             "cve_id":  cve_id,
@@ -136,11 +139,13 @@ def _verify_code_patch(cve_id: str, cwe: str, patch_dir: Path) -> dict:
             "findings": [],
         }
 
-    # Rules to check — CWE-specific + general security
-    rules = list(set(CWE_TO_RULES.get(cwe, []) + ["p/python", "p/security-audit"]))
-
     all_findings = []
     for patched_file in patched_files:
+        ext = patched_file.suffix.lower()
+        lang_defaults = _EXT_TO_DEFAULTS.get(ext, DEFAULT_RULES_PYTHON)
+        cwe_rules = CWE_TO_RULES.get(cwe, [])
+        base = cwe_rules if cwe_rules else lang_defaults
+        rules = list(set(base + ["p/security-audit"]))
         findings = _run_semgrep_on_file(str(patched_file), rules)
         all_findings.extend(findings)
 

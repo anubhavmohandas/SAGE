@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 from typing import Optional
 from sage.utils.colors import cprint
+from sage.utils.validate import validate_analyzer_response
 
 
 def _prompts_dir() -> Path:
@@ -425,6 +426,9 @@ def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
                     response = model.generate_content(prompt)
             raw = _strip_fences(response.text.strip())
             result = json.loads(raw)
+            result = validate_analyzer_response(result, cve_id)
+            if result is None:
+                return None
             cprint(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
                   f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
             time.sleep(5)  # 5s between calls — stay under free tier 15 req/min
@@ -476,6 +480,9 @@ def _call_gemini_new_sdk(prompt: str, cve_id: str, cfg, genai_module) -> Optiona
                 raise last_err
             raw = _strip_fences(response.text.strip())
             result = json.loads(raw)
+            result = validate_analyzer_response(result, cve_id)
+            if result is None:
+                return None
             cprint(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
                   f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
             time.sleep(5)
@@ -513,6 +520,9 @@ def _call_claude(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Opt
         )
         raw = _strip_fences(response.content[0].text.strip())
         result = json.loads(raw)
+        result = validate_analyzer_response(result, cve_id)
+        if result is None:
+            return None
         cprint(f"[analyzer] {cve_id} (Claude/{model.split('-')[1]}) → vulnerable={result.get('vulnerable')} "
               f"confidence={result.get('confidence', 0):.2f}")
         return result
@@ -670,6 +680,10 @@ def _read_response(cve_id: str, findings: list[dict], G, repo_path: str = "") ->
         response = json.loads(response_file.read_text())
     except Exception as e:
         cprint(f"[analyzer] Bad response file for {cve_id}: {e}")
+        return None
+
+    response = validate_analyzer_response(response, cve_id)
+    if response is None:
         return None
 
     if not response.get("vulnerable", False):

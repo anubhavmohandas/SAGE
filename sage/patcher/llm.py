@@ -33,6 +33,7 @@ from typing import Optional
 
 from sage.config import cfg
 from sage.utils.colors import cprint
+from sage.utils.validate import validate_patcher_response
 
 
 def _patches_dir() -> Path:
@@ -218,6 +219,9 @@ def _call_claude_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
                     raw = raw[4:]
             raw = raw.strip()
             result = json.loads(raw)
+            result = validate_patcher_response(result, cve_id)
+            if result is None:
+                return None
             cprint(f"[patcher] {cve_id} (Claude Sonnet) → patch generated: {result.get('summary', '')[:80]}")
             return result
         except Exception as e:
@@ -254,6 +258,9 @@ def _call_gemini_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
         raw = _re.sub(r'^```(?:json)?\s*', '', raw)
         raw = _re.sub(r'\s*```$', '', raw).strip()
         result = json.loads(raw)
+        result = validate_patcher_response(result, cve_id)
+        if result is None:
+            return None
         cprint(f"[patcher] {cve_id} (Gemini) → patch generated: {result.get('summary', '')[:80]}")
         return result
     except Exception as e:
@@ -278,6 +285,9 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
     if response_file.exists():
         try:
             result = json.loads(response_file.read_text())
+            result = validate_patcher_response(result, cve_id)
+            if result is None:
+                return None
             cprint(f"[patcher] {cve_id} → loaded manual patch response")
             return result
         except Exception as e:
@@ -318,6 +328,9 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
     if response_file.exists():
         try:
             result = json.loads(response_file.read_text())
+            result = validate_patcher_response(result, cve_id)
+            if result is None:
+                return None
             cprint(f"[patcher] {cve_id} → manual patch loaded")
             return result
         except Exception as e:
@@ -336,8 +349,13 @@ def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: di
         patched   = pf.get("patched_code", "")
         expl      = pf.get("explanation", "")
 
-        # Read original file
-        original_path = Path(repo_path) / file_rel
+        # Security: resolve and verify path stays inside repo root
+        repo_root     = Path(repo_path).resolve()
+        original_path = (repo_root / file_rel).resolve()
+        if not str(original_path).startswith(str(repo_root) + "/") and original_path != repo_root:
+            cprint(f"[patcher] SECURITY: file_rel {file_rel!r} escapes repo root — skipping")
+            continue
+
         original_code = ""
         if original_path.exists():
             original_code = original_path.read_text(errors="ignore")
