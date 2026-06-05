@@ -63,41 +63,37 @@ def _ask_mode() -> str:
     """
     Determine analysis mode.
 
-    Priority:
-      1. Non-interactive (CI/cron/pipe) → API always.
-      2. API keys present in env → API automatically, no prompt.
-      3. No API keys + interactive → ask whether to do manual review.
+    Non-interactive (CI/cron/pipe): always API if keys present, else manual.
+    Interactive: always ask — even if keys are present. Quota may be exhausted,
+    user may prefer manual copy-paste, or may want to save credits.
     """
     import sys
     from sage.config import cfg
 
     has_api_key = bool(cfg.ANTHROPIC_API_KEY or cfg.GEMINI_API_KEY)
 
-    # Non-interactive: use API (keys must be set in CI env)
+    # Non-interactive: no prompt, decide automatically
     if not sys.stdin.isatty():
-        if has_api_key:
-            print("[analyzer] Non-interactive — using API mode")
-        else:
-            print("[analyzer] Non-interactive, no API keys — exporting prompts for manual review")
-        return "api" if has_api_key else "manual"
+        mode = "api" if has_api_key else "manual"
+        print(f"[analyzer] Non-interactive — {mode} mode")
+        return mode
 
-    # Interactive + keys present → use API, skip the question
+    # Interactive: always ask
+    print("\n[analyzer] ── Analysis Mode ──")
     if has_api_key:
         model_hint = "Gemini" if cfg.GEMINI_API_KEY else "Claude"
-        print(f"[analyzer] API keys detected — using {model_hint} (API mode)")
-        return "api"
-
-    # Interactive + no keys → ask
-    print("\n[analyzer] ── Analysis Mode ──")
-    print("  No API keys found in .env.")
-    print("  [y] I'll add keys now and retry  |  [n] Export prompts for manual review")
+        print(f"  API keys detected ({model_hint} available)")
+    else:
+        print("  No API keys found in .env")
+    print("  [1] API mode   — call LLM automatically")
+    print("  [2] Manual mode — generate prompt files, paste into Claude, save responses")
     while True:
-        choice = input("  Your choice (y/n): ").strip().lower()
-        if choice in ("y", "yes"):
+        choice = input("  Your choice (1/2): ").strip()
+        if choice == "1":
             return "api"
-        if choice in ("n", "no"):
+        if choice == "2":
             return "manual"
-        print("  Please enter y or n.")
+        print("  Please enter 1 or 2.")
 
 
 def analyze_findings(
@@ -230,9 +226,62 @@ def _analyze_manual(
             print(f"  │  Paste content into Claude → save response as:")
             print(f"  │  \"{resp_path.resolve()}\"")
             print(f"  └────────────────────────────────────────────────────\n")
-        print(f"  Re-run after saving responses: python3 main.py --synapse <repo>")
+        # Wait for user to paste responses, then continue automatically
+        _wait_for_responses(pending_files, by_cve, G)
+        # Re-read all responses after user confirms
+        confirmed = []
+        for cve_id in by_cve:
+            response_file = _responses_dir() / f"{cve_id}.json"
+            if response_file.exists():
+                result = _read_response(cve_id, by_cve[cve_id], G)
+                if result:
+                    confirmed.append(result)
+        print(f"[analyzer] Confirmed after review: {len(confirmed)}/{len(by_cve)} CVEs exploitable")
 
     return confirmed
+
+
+def _wait_for_responses(pending_files: list, by_cve: dict, G):
+    """
+    Pause the pipeline and wait for the user to paste responses.
+    Watches for new response files and continues once all are present,
+    or when the user presses Enter to continue with whatever is saved.
+    """
+    import sys, time
+
+    # Non-interactive — can't wait, just continue
+    if not sys.stdin.isatty():
+        return
+
+    responses_dir = _responses_dir()
+    total = len(pending_files)
+
+    print(f"\n[analyzer] ── Pipeline paused — waiting for responses ──")
+    print(f"  Open each prompt file, paste into Claude, save the JSON response.")
+    print(f"  The pipeline will continue automatically once all {total} response(s) are saved.")
+    print(f"  Or press Enter at any time to continue with responses saved so far.\n")
+
+    while True:
+        # Check how many are done
+        done = sum(
+            1 for pf in pending_files
+            if (responses_dir / pf.name.replace(".txt", ".json")).exists()
+        )
+        remaining = total - done
+
+        if remaining == 0:
+            print(f"\n[analyzer] All {total} response(s) received — continuing pipeline...")
+            break
+
+        print(f"  [{done}/{total} saved]  Waiting... (press Enter to continue anyway)", end="\r", flush=True)
+
+        # Non-blocking check: poll every 3s, but also catch Enter
+        import select
+        ready, _, _ = select.select([sys.stdin], [], [], 3.0)
+        if ready:
+            sys.stdin.readline()  # consume the Enter
+            print(f"\n[analyzer] Continuing with {done}/{total} responses saved...")
+            break
 
 
 # ─── Shared helpers ──────────────────────────────────────────────────────────
@@ -317,9 +366,14 @@ def _call_llm_api(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Op
         result = _call_gemini(prompt, cve_id, cfg)
         if result is not None:
             return result
+        # Only fall back to Claude if Gemini quota exhausted — not on every 429
+        # (Gemini 429 = rate limit, not quota; wait and retry instead)
         if cfg.ANTHROPIC_API_KEY:
             print(f"[analyzer] Falling back to Claude for {cve_id}")
-            return _call_claude(prompt, cve_id, cfg, severity)
+            result = _call_claude(prompt, cve_id, cfg, severity)
+            if result is None:
+                print(f"[analyzer] Both APIs failed for {cve_id} — skipping")
+            return result
         return None
     elif cfg.ANTHROPIC_API_KEY:
         return _call_claude(prompt, cve_id, cfg, severity)
@@ -329,26 +383,50 @@ def _call_llm_api(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Op
 
 def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
     import time
+
+    # Try new google-genai SDK first (recommended), fall back to deprecated generativeai
+    try:
+        from google import genai as google_genai
+        return _call_gemini_new_sdk(prompt, cve_id, cfg, google_genai)
+    except ImportError:
+        pass
+
+    # Deprecated SDK fallback
     try:
         import google.generativeai as genai
     except ImportError:
-        print("[analyzer] google-generativeai not installed.")
+        print("[analyzer] Neither google-genai nor google-generativeai installed.")
         return None
 
-    genai.configure(api_key=cfg.GEMINI_API_KEY)
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        generation_config={"temperature": 0.2, "max_output_tokens": 1024},
-    )
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        genai.configure(api_key=cfg.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            generation_config={"temperature": 0.2, "max_output_tokens": 1024},
+        )
+
     raw = ""
     for attempt in range(4):
         try:
-            response = model.generate_content(prompt)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # Try flash-lite first (higher free tier quota), fall back to flash
+                try:
+                    lite_model = genai.GenerativeModel(
+                        model_name="gemini-2.0-flash-lite",
+                        generation_config={"temperature": 0.2, "max_output_tokens": 1024},
+                    )
+                    response = lite_model.generate_content(prompt)
+                except Exception:
+                    response = model.generate_content(prompt)
             raw = _strip_fences(response.text.strip())
             result = json.loads(raw)
             print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
                   f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
-            time.sleep(4)
+            time.sleep(5)  # 5s between calls — stay under free tier 15 req/min
             return result
         except json.JSONDecodeError as e:
             print(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
@@ -357,11 +435,62 @@ def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
             err = str(e)
             if "429" in err or "quota" in err.lower() or "rate" in err.lower():
                 if attempt < 3:
-                    wait = 5 * (2 ** attempt)
+                    wait = 15 * (2 ** attempt)  # 15s, 30s, 60s — generous backoff
                     print(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
                     time.sleep(wait)
                 else:
-                    print(f"[analyzer] Gemini quota exhausted for {cve_id} — falling back")
+                    print(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
+                    return None
+            else:
+                print(f"[analyzer] Gemini error for {cve_id}: {e}")
+                return None
+    return None
+
+
+def _call_gemini_new_sdk(prompt: str, cve_id: str, cfg, genai_module) -> Optional[dict]:
+    """Use the new google-genai SDK (replaces deprecated google-generativeai)."""
+    import time
+    client = genai_module.Client(api_key=cfg.GEMINI_API_KEY)
+    # Try models in order of free-tier quota availability
+    models_to_try = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"]
+    raw = ""
+    for attempt in range(4):
+        try:
+            response = None
+            last_err = None
+            for model_name in models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={"temperature": 0.2, "max_output_tokens": 1024},
+                    )
+                    break
+                except Exception as me:
+                    if "429" in str(me) or "quota" in str(me).lower():
+                        last_err = me
+                        continue
+                    raise
+            if response is None:
+                raise last_err
+            raw = _strip_fences(response.text.strip())
+            result = json.loads(raw)
+            print(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
+                  f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
+            time.sleep(5)
+            return result
+        except json.JSONDecodeError as e:
+            print(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
+            return None
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                if attempt < 3:
+                    wait = 15 * (2 ** attempt)
+                    print(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
+                    time.sleep(wait)
+                else:
+                    print(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
                     return None
             else:
                 print(f"[analyzer] Gemini error for {cve_id}: {e}")

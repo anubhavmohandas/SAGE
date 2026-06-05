@@ -305,6 +305,41 @@ def _generate_diff(original: str, patched: str, from_file: str, to_file: str) ->
 
 # ─── Dep bump ─────────────────────────────────────────────────────────────────
 
+def _clamp_to_pypi(package: str, requested_version: str) -> str:
+    """
+    Check if requested_version exists on PyPI. If not, return the latest
+    published version instead so we never write an impossible constraint.
+    Falls back to requested_version silently on network errors.
+    """
+    import requests as _req
+    from packaging.version import Version as _V, InvalidVersion
+    try:
+        resp = _req.get(f"https://pypi.org/pypi/{package}/json", timeout=8)
+        if resp.status_code != 200:
+            return requested_version
+        releases = list(resp.json().get("releases", {}).keys())
+        # Filter to stable releases only
+        stable = []
+        for r in releases:
+            try:
+                v = _V(r)
+                if not v.is_prerelease and not v.is_devrelease:
+                    stable.append(v)
+            except InvalidVersion:
+                pass
+        if not stable:
+            return requested_version
+        latest = str(max(stable))
+        try:
+            if _V(requested_version) > _V(latest):
+                return latest
+        except InvalidVersion:
+            return latest
+    except Exception:
+        pass
+    return requested_version
+
+
 def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
     """
     Read requirements.txt from repo and bump affected package versions.
@@ -345,6 +380,14 @@ def _generate_dep_bump(cves: list[dict], repo_path: str) -> Optional[dict]:
     if not bumps:
         print("[patcher] No version constraints found in CVE data — skipping dep bump")
         return None
+
+    # Validate safe versions exist on PyPI — clamp to latest published if not
+    for pkg in list(bumps.keys()):
+        safe_ver, cve_ids = bumps[pkg]
+        actual = _clamp_to_pypi(pkg, safe_ver)
+        if actual != safe_ver:
+            print(f"[patcher] {pkg}: safe version {safe_ver} not on PyPI — clamped to {actual}")
+        bumps[pkg] = (actual, cve_ids)
 
     # Rewrite requirements lines
     new_lines = []

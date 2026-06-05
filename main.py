@@ -304,4 +304,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n[SAGE] Interrupted — exiting cleanly.")
+        sys.exit(0)
