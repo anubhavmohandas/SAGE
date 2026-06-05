@@ -91,6 +91,28 @@ def init_db():
     conn.close()
     print("[store] Database initialized.")
 
+    # One-time migration: copy CVEs from legacy data/sage.db into the scoped DB.
+    # This runs silently when the scoped DB is brand new — ensures previous scans
+    # aren't lost when switching to per-repo isolation.
+    scoped = _db_path()
+    legacy = _LEGACY_DB_PATH
+    if scoped != legacy and legacy.exists() and scoped.exists():
+        try:
+            scoped_conn = sqlite3.connect(str(scoped))
+            count = scoped_conn.execute("SELECT COUNT(*) FROM cves").fetchone()[0]
+            scoped_conn.close()
+            if count == 0:
+                # Scoped DB is empty — migrate from legacy
+                import shutil as _shutil
+                _shutil.copy2(str(legacy), str(scoped))
+                migrated = sqlite3.connect(str(scoped))
+                n = migrated.execute("SELECT COUNT(*) FROM cves").fetchone()[0]
+                migrated.close()
+                if n > 0:
+                    print(f"[store] Migrated {n} CVEs from legacy data/sage.db → {scoped}")
+        except Exception:
+            pass  # Migration is best-effort — never break startup
+
 
 def save_cve(cve_entry: dict):
     """

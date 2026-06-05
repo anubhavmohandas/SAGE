@@ -32,9 +32,9 @@ data/
 outputs/
 demos/
 
-# synapse_graphs — only demo.html is public, everything else private
-synapse_graphs/*
-!synapse_graphs/demo.html
+# Old/stale files
+synapse_graphs/
+unpacked/
 
 # JSON ignored globally
 *.json
