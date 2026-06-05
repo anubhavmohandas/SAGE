@@ -185,7 +185,7 @@ def _analyze_manual(
 
         # If response exists — read it
         if response_file.exists():
-            result = _read_response(cve_id, cve_findings, G)
+            result = _read_response(cve_id, cve_findings, G, repo_path)
             if result:
                 confirmed.append(result)
             continue
@@ -234,7 +234,7 @@ def _analyze_manual(
         for cve_id in by_cve:
             response_file = _responses_dir() / f"{cve_id}.json"
             if response_file.exists():
-                result = _read_response(cve_id, by_cve[cve_id], G)
+                result = _read_response(cve_id, by_cve[cve_id], G, repo_path)
                 if result:
                     confirmed.append(result)
         cprint(f"[analyzer] Confirmed after review: {len(confirmed)}/{len(by_cve)} CVEs exploitable")
@@ -663,7 +663,7 @@ OUTPUT: Respond with ONLY valid JSON. No text before or after. No markdown fence
 
 # ─── Response reader ──────────────────────────────────────────────────────────
 
-def _read_response(cve_id: str, findings: list[dict], G) -> Optional[dict]:
+def _read_response(cve_id: str, findings: list[dict], G, repo_path: str = "") -> Optional[dict]:
     """Read a manually saved response JSON for a CVE."""
     response_file = _responses_dir() / f"{cve_id}.json"
     try:
@@ -683,6 +683,25 @@ def _read_response(cve_id: str, findings: list[dict], G) -> Optional[dict]:
     cprint(f"[analyzer] {cve_id} → CONFIRMED exploitable "
           f"(confidence: {response.get('confidence', 0):.1f})")
 
+    # Re-extract function source so the patcher has actual code to patch.
+    # The live API path includes function_codes in its return dict; manual mode
+    # previously dropped it here, causing the patcher to emit an empty VULNERABLE
+    # CODE block and skip code-level patches entirely.
+    function_codes: list[dict] = []
+    if repo_path:
+        from sage.synapse.mapper import get_blast_radius
+        blast = get_blast_radius(G, cve_node)
+        if blast:
+            function_codes = _extract_function_codes(
+                blast.get("exposed_functions", []), repo_path, G
+            )
+            if not function_codes:
+                function_codes = _extract_file_snippets(
+                    blast.get("exposed_files", []),
+                    repo_path,
+                    node_data.get("package", ""),
+                )
+
     return {
         "cve_id":             cve_id,
         "severity":           node_data.get("severity", "UNKNOWN"),
@@ -696,6 +715,7 @@ def _read_response(cve_id: str, findings: list[dict], G) -> Optional[dict]:
         "attack_vector":      response.get("attack_vector", ""),
         "recommendation":     response.get("recommendation", ""),
         "semgrep_findings":   findings,
+        "function_codes":     function_codes,
     }
 
 
