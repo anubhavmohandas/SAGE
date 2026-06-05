@@ -1,4 +1,5 @@
-![Uploading image.png…]()
+<img width="2752" height="1536" alt="Security_Analysis_and_Graph_Engine" src="https://github.com/user-attachments/assets/65578d8a-b384-4ba9-af52-908947895c16" />
+
 
 # SAGE — Security Analysis & Graph Engine
 
