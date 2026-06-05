@@ -154,12 +154,15 @@ def _run_existing_tests(repo_path: str) -> dict:
             for line in lines[-20:]:
                 print(f"[tests]   {line}")
 
+        # Load stored baseline (from a previous clean run), or store this as baseline
+        baseline_failures = _load_or_store_baseline(repo_path, failures)
+
         return {
             "passed":            passed,
             "output":            output,
             "count":             count,
             "failures":          failures,
-            "baseline_failures": failures,  # these are all pre-patch = baseline
+            "baseline_failures": baseline_failures,
         }
 
     except subprocess.TimeoutExpired:
@@ -174,6 +177,39 @@ def _run_existing_tests(repo_path: str) -> dict:
     except Exception as e:
         print(f"[tests] Error running tests: {e}")
         return {"passed": False, "output": str(e), "count": 0}
+
+
+def _load_or_store_baseline(repo_path: str, current_failures: int) -> int:
+    """
+    Load the stored baseline failure count for this repo, or store current as baseline.
+
+    On first ever run there's no baseline — we store current_failures as the baseline
+    (they're all pre-existing since no patch has been applied yet).
+    On subsequent runs we load the stored baseline so new failures are correctly flagged.
+
+    Baseline file: data/<repo_name>/test_baseline.json
+    """
+    import json as _json
+    try:
+        repo_name = Path(repo_path).name
+        baseline_file = cfg.data_dir() / "test_baseline.json"
+
+        if baseline_file.exists():
+            data = _json.loads(baseline_file.read_text())
+            stored = data.get("baseline_failures", current_failures)
+            print(f"[tests] Baseline: {stored} pre-existing failure(s)")
+            return stored
+        else:
+            # First run — store as baseline
+            baseline_file.write_text(_json.dumps({
+                "baseline_failures": current_failures,
+                "repo": repo_name,
+                "note": "Failures present before any SAGE patch was applied"
+            }, indent=2))
+            print(f"[tests] Baseline stored: {current_failures} failure(s) (pre-existing)")
+            return current_failures
+    except Exception:
+        return current_failures  # fallback: treat all as pre-existing
 
 
 def _install_repo_deps(repo_path: str):

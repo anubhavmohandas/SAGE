@@ -127,12 +127,25 @@ def _find_paths_to_cve(
     if not lib_nodes:
         return paths
 
-    # Step 2 — Find functions that directly use any of these libraries
+    # Step 2 — Find functions/files that directly use any of these libraries.
+    # The graph has two patterns:
+    #   a) fn: --USES--> lib:       (function directly uses library)
+    #   b) file: --IMPORTS--> lib:  (file imports library → all functions in file are exposed)
     direct_users: set[str] = set()
     for lib_node in lib_nodes:
-        for fn_node in G_rev.predecessors(lib_node):
-            if fn_node.startswith("fn:") or fn_node.startswith("function:"):
-                direct_users.add(fn_node)
+        for predecessor in G_rev.predecessors(lib_node):
+            if predecessor.startswith("fn:") or predecessor.startswith("function:"):
+                # Pattern a: function directly uses lib
+                direct_users.add(predecessor)
+            elif predecessor.startswith("file:"):
+                # Pattern b: file imports lib → find all functions in that file
+                for fn_node in G_rev.predecessors(predecessor):
+                    if fn_node.startswith("fn:") or fn_node.startswith("function:"):
+                        direct_users.add(fn_node)
+                # Also treat the file itself as a reachability point if no functions found
+                if not any(p.startswith("fn:") or p.startswith("function:")
+                           for p in G_rev.predecessors(predecessor)):
+                    direct_users.add(predecessor)
 
     if not direct_users:
         return paths
@@ -215,7 +228,7 @@ def _trace_to_entries(
     # Walk to callers
     results: list[dict] = []
     callers = [n for n in G_rev.predecessors(fn_node)
-               if n.startswith("fn:") or n.startswith("function:")]
+               if n.startswith("fn:") or n.startswith("function:") or n.startswith("file:")]
 
     if not callers:
         # No callers — this function is itself a root. Treat as potential entry.

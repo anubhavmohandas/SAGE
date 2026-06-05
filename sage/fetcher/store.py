@@ -91,9 +91,8 @@ def init_db():
     conn.close()
     print("[store] Database initialized.")
 
-    # One-time migration: copy CVEs from legacy data/sage.db into the scoped DB.
-    # This runs silently when the scoped DB is brand new — ensures previous scans
-    # aren't lost when switching to per-repo isolation.
+    # One-time migration: copy CVEs from legacy data/sage.db into the scoped DB,
+    # then delete the legacy file so it stops being confusing.
     scoped = _db_path()
     legacy = _LEGACY_DB_PATH
     if scoped != legacy and legacy.exists() and scoped.exists():
@@ -102,7 +101,6 @@ def init_db():
             count = scoped_conn.execute("SELECT COUNT(*) FROM cves").fetchone()[0]
             scoped_conn.close()
             if count == 0:
-                # Scoped DB is empty — migrate from legacy
                 import shutil as _shutil
                 _shutil.copy2(str(legacy), str(scoped))
                 migrated = sqlite3.connect(str(scoped))
@@ -110,8 +108,37 @@ def init_db():
                 migrated.close()
                 if n > 0:
                     print(f"[store] Migrated {n} CVEs from legacy data/sage.db → {scoped}")
+            # Delete legacy DB once all known repo DBs are populated
+            # (safe to remove — all data is in scoped DBs now)
+            _maybe_delete_legacy(legacy)
         except Exception:
             pass  # Migration is best-effort — never break startup
+
+
+def _maybe_delete_legacy(legacy: Path):
+    """
+    Delete the legacy data/sage.db once every scoped DB under data/ has been populated.
+    Only deletes if all subdirectories under data/ have their own sage.db.
+    """
+    try:
+        data_dir = legacy.parent
+        scoped_dbs = list(data_dir.rglob("*/sage.db"))
+        if not scoped_dbs:
+            return
+        # Check all scoped DBs have at least some CVEs
+        all_populated = True
+        for db in scoped_dbs:
+            c = sqlite3.connect(str(db))
+            n = c.execute("SELECT COUNT(*) FROM cves").fetchone()[0]
+            c.close()
+            if n == 0:
+                all_populated = False
+                break
+        if all_populated:
+            legacy.unlink()
+            print(f"[store] Legacy data/sage.db removed — all repo DBs populated")
+    except Exception:
+        pass
 
 
 def save_cve(cve_entry: dict):

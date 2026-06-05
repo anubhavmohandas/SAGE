@@ -105,7 +105,8 @@ def run_fetch(repo_path: str, days: int = 1):
     source = "npm advisories" if is_js_repo else "NVD"
     print(f"  CVEs fetched from {source}:  {len(raw_cves)}")
     print(f"  Relevant to your stack:    {len(relevant)}")
-    print(f"  Saved to DB:               data/sage.db")
+    from sage.fetcher.store import _db_path
+    print(f"  Saved to DB:               {_db_path()}")
 
     if relevant:
         print(f"\n  Relevant CVEs found:")

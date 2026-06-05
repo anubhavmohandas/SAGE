@@ -63,23 +63,33 @@ class Config:
         detected = _detect_github_repo_from_path(repo_path)
         if detected and detected != self.GITHUB_REPO:
             if sys.stdin.isatty():
-                print(f"\n[SAGE] ── GitHub Repo Mismatch ──")
-                print(f"  GITHUB_REPO in .env:  {self.GITHUB_REPO}")
-                print(f"  Detected from remote: {detected}")
-                print(f"  [1] Use detected ({detected})  [2] Keep .env value  [3] Enter manually")
-                choice = input("  Choice (1/2/3): ").strip()
-                if choice == "1":
-                    self.GITHUB_REPO = detected
-                    print(f"  Using {detected}")
-                elif choice == "3":
-                    val = input("  Enter owner/repo: ").strip()
-                    if val:
-                        self.GITHUB_REPO = val
-                        print(f"  Using {val}")
+                # Check if user already made a choice for this repo (stored in data/<repo>/.github_repo)
+                cache_file = Path("data") / self._repo_name / ".github_repo"
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                if cache_file.exists():
+                    cached = cache_file.read_text().strip()
+                    self.GITHUB_REPO = cached
+                    # Silent — user already decided
                 else:
-                    print(f"  Keeping {self.GITHUB_REPO}")
+                    print(f"\n[SAGE] ── GitHub Repo Mismatch ──")
+                    print(f"  GITHUB_REPO in .env:  {self.GITHUB_REPO}")
+                    print(f"  Detected from remote: {detected}")
+                    print(f"  [1] Use detected ({detected})  [2] Keep .env value  [3] Enter manually")
+                    choice = input("  Choice (1/2/3): ").strip()
+                    if choice == "1":
+                        self.GITHUB_REPO = detected
+                        print(f"  Using {detected}")
+                    elif choice == "3":
+                        val = input("  Enter owner/repo: ").strip()
+                        if val:
+                            self.GITHUB_REPO = val
+                            print(f"  Using {val}")
+                    else:
+                        print(f"  Keeping {self.GITHUB_REPO}")
+                    # Remember this choice
+                    cache_file.write_text(self.GITHUB_REPO)
+                    print(f"  (Choice saved — won't ask again for {self._repo_name})")
             else:
-                # Non-interactive: always use detected repo (correct for CI)
                 print(f"[SAGE] Auto-selecting GitHub repo: {detected} (detected from git remote)")
                 self.GITHUB_REPO = detected
 
