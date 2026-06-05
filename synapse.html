@@ -348,9 +348,10 @@ function layout(animate = false) {
   const visibleIds  = getConnectedIds(centerNodeId);
   const neighbours  = visibleIds.filter(id => id !== centerNodeId);
   const n = neighbours.length;
-  // Scale ring radius with neighbour count so nodes don't crowd
-  const baseR = Math.min(W, H) * 0.32;
-  const R = n <= 8 ? baseR : Math.min(baseR * (1 + (n - 8) * 0.04), Math.min(W, H) * 0.44);
+  // Scale ring radius so nodes never crowd — guarantee min arc gap of 54px between nodes
+  const baseR = Math.min(W, H) * 0.34;
+  const minRForGap = n > 1 ? (54 * n) / (2 * Math.PI) : baseR;
+  const R = Math.max(baseR, Math.min(minRForGap, Math.min(W, H) * 0.48));
 
   const newPositions = {};
   newPositions[centerNodeId] = { x: cx, y: cy };
@@ -564,24 +565,86 @@ function drawNode(id) {
   ctx.font = `bold ${Math.max(8, r*0.42)}px monospace`;
   ctx.fillText(TYPE_ICON[node.type]||'?', pos.x, pos.y);
 
-  // Label outside
-  const angle = isCenter ? -Math.PI/2 : Math.atan2(rawPos.y - canvas.height/2, rawPos.x - canvas.width/2);
-  const ldist = r + (isCenter ? 52 : 28);
-  const lx = pos.x + Math.cos(angle)*ldist;
-  const ly = pos.y + Math.sin(angle)*ldist;
+  // ── Smart label strategy ────────────────────────────────────────────────────
+  // Arc gap is computed in SCREEN pixels (zoom-aware) so the threshold is meaningful.
+  // Layout:
+  //   arcGap >= 110px  → all labels, full text, type tag shown
+  //   arcGap  60-110px → all labels, truncated to fit arc gap, no type tag
+  //   arcGap <  60px   → CVE/library always; file/fn on hover/path only
+  //                       stagger alternate nodes onto inner/outer label ring
 
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `${isCenter ? '12px' : '10px'} SF Mono, monospace`;
+  const visNeighbours = Object.keys(positions).length - 1;
+  // Ring radius in SCREEN pixels (multiply world radius by zoom)
+  const worldRingR = Math.max(
+    Math.min(canvas.width, canvas.height) / zoom * 0.34,
+    visNeighbours > 1 ? (54 * visNeighbours) / (2 * Math.PI) : 0
+  );
+  const screenRingR = worldRingR * zoom;
+  const arcGap = visNeighbours > 0 ? (2 * Math.PI * screenRingR) / visNeighbours : 999;
+
+  const FULL_THRESHOLD   = 110; // show everything
+  const TRUNC_THRESHOLD  = 60;  // show truncated labels for all
+  // Below TRUNC_THRESHOLD: signal nodes always, others hover-only + stagger
+
+  const isSignal  = node.type === 'cve' || node.type === 'library';
+  const showLabel = isCenter || onPath || isHovered || isSignal || arcGap >= TRUNC_THRESHOLD;
+  if (!showLabel) return;
+
+  // Anchor angle — radially outward from center
+  const angle = isCenter
+    ? -Math.PI/2
+    : Math.atan2(rawPos.y - canvas.height / 2, rawPos.x - canvas.width / 2);
+
+  // Stagger: when crowded, alternate even/odd nodes between inner and outer label rings
+  // so adjacent labels are offset vertically and stop colliding
+  const nodeIndex   = Object.keys(positions).indexOf(id);
+  const stagger     = (arcGap < TRUNC_THRESHOLD && !isCenter && !isSignal)
+    ? (nodeIndex % 2 === 0 ? -14 : 14)
+    : 0;
+  const ldist = r + (isCenter ? 56 : 34) + stagger;
+  const lx = pos.x + Math.cos(angle) * ldist;
+  const ly = pos.y + Math.sin(angle) * ldist;
+
+  // Align outward so label never crosses back over the node
+  const absAngleDeg = ((angle * 180 / Math.PI) % 360 + 360) % 360;
+  if (!isCenter) {
+    if      (absAngleDeg > 280 || absAngleDeg < 80)  ctx.textAlign = 'left';
+    else if (absAngleDeg > 100 && absAngleDeg < 260) ctx.textAlign = 'right';
+    else                                              ctx.textAlign = 'center';
+  } else {
+    ctx.textAlign = 'center';
+  }
+  ctx.textBaseline = 'middle';
+
+  // Font size — shrink slightly when crowded
+  const fs = isCenter ? 12 : (arcGap >= FULL_THRESHOLD ? 10 : 9);
+  ctx.font = `${fs}px SF Mono, monospace`;
+
+  // Truncate label to fit available arc gap when crowded
+  // Max chars ≈ arcGap / ~7px per char (at 9-10px font)
+  const charPx    = fs * 0.65;
+  const maxChars  = arcGap >= FULL_THRESHOLD ? 999 : Math.max(6, Math.floor(arcGap / charPx));
+  const rawLabel  = node.label || '';
+  const label     = (isHovered || onPath || arcGap >= FULL_THRESHOLD || rawLabel.length <= maxChars)
+    ? rawLabel
+    : rawLabel.slice(0, maxChars - 1) + '…';
+
   ctx.fillStyle = onPath
     ? '#ff8888'
-    : isCenter ? nodeColor
-    : isHovered ? (isDark?'#fff':'#000')
-    : (isDark?'rgba(255,255,255,0.78)':'rgba(0,0,60,0.72)');
-  ctx.fillText(node.label, lx, ly);
+    : isCenter   ? nodeColor
+    : isHovered  ? (isDark ? '#fff' : '#000')
+    : node.type === 'cve'     ? (isDark ? 'rgba(255,140,140,0.92)' : 'rgba(180,0,0,0.85)')
+    : node.type === 'library' ? (isDark ? 'rgba(255,190,80,0.92)'  : 'rgba(160,90,0,0.85)')
+    : (isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,60,0.70)');
+  ctx.fillText(label, lx, ly);
 
-  ctx.font = '8px monospace';
-  ctx.fillStyle = (onPath ? '#ff6060' : nodeColor) + (isDark?'99':'bb');
-  ctx.fillText(node.type.toUpperCase(), lx, ly+13);
+  // Type tag — only when there's room or node is signal/hovered/path
+  const showTypeTag = arcGap >= FULL_THRESHOLD || isCenter || isHovered || onPath || isSignal;
+  if (showTypeTag) {
+    ctx.font = '8px monospace';
+    ctx.fillStyle = (onPath ? '#ff6060' : nodeColor) + (isDark ? '99' : 'bb');
+    ctx.fillText(node.type.toUpperCase(), lx, ly + 13);
+  }
 }
 
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
@@ -909,10 +972,21 @@ function _buildAttackPanel() {
   content.innerHTML = ATTACK_PATHS.map(ap => {
     const sev = ap.severity || 'UNKNOWN';
     const pathsHtml = (ap.paths || []).slice(0, 4).map(p => {
-      const chain = p.path.join(' → ');
+      // Render as vertical hop chain instead of flat arrow string
+      const hops = p.path.map((step, i) => {
+        const isLast = i === p.path.length - 1;
+        return `<div style="display:flex;align-items:center;gap:5px;margin:1px 0;">
+          <span style="opacity:0.4;font-size:8px;">${isLast ? '▶' : '↓'}</span>
+          <span style="color:${isLast ? '#ff8080' : 'inherit'};font-weight:${isLast?'bold':'normal'}">${step}</span>
+        </div>`;
+      }).join('');
+      const entryType = (p.entry_type || '').replace(/_/g,' ').toUpperCase();
       return `<div class="ap-path">
-        <div class="ap-entry-type">${(p.entry_type || '').replace(/_/g,' ').toUpperCase()} · ${p.depth} hop${p.depth!==1?'s':''}</div>
-        ${chain}
+        <div class="ap-entry-type" style="margin-bottom:4px;">${entryType}</div>
+        ${hops}
+        <div style="margin-top:5px;padding:2px 6px;border-radius:3px;background:rgba(255,80,80,0.12);color:#ff8080;font-size:8px;letter-spacing:1px;display:inline-block;">
+          REACHABLE &nbsp;·&nbsp; ${p.depth} hop${p.depth!==1?'s':''}
+        </div>
       </div>`;
     }).join('');
 
