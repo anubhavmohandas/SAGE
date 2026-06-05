@@ -185,29 +185,143 @@ OUTPUT: Respond with ONLY valid JSON. No text before or after. No markdown fence
 
 
 def _call_claude_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
-    """Call Claude (Sonnet) for patch generation — best code quality."""
+    """
+    Call Claude (Sonnet) for patch generation.
+    Falls back to manual export if no API key or credits exhausted.
+    """
+    import sys
+
+    # Check for API key first
+    if not cfg.ANTHROPIC_API_KEY and not cfg.GEMINI_API_KEY:
+        return _manual_patch(prompt, cve_id)
+
+    # Try Gemini first (free tier), then Claude
+    result = _call_gemini_for_patch(prompt, cve_id)
+    if result:
+        return result
+
+    if cfg.ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+            result = json.loads(raw)
+            print(f"[patcher] {cve_id} (Claude Sonnet) → patch generated: {result.get('summary', '')[:80]}")
+            return result
+        except Exception as e:
+            print(f"[patcher] Claude error for {cve_id}: {e}")
+
+    # Both APIs failed — fall back to manual
+    return _manual_patch(prompt, cve_id)
+
+
+def _call_gemini_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
+    """Try Gemini for patch generation (free tier)."""
+    if not cfg.GEMINI_API_KEY:
+        return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            temperature=0.1,  # low temp for deterministic code
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text.strip()
-        # Strip fences
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
+        try:
+            from google import genai as google_genai
+            client = google_genai.Client(api_key=cfg.GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config={"temperature": 0.1, "max_output_tokens": 4096},
+            )
+            raw = response.text.strip()
+        except ImportError:
+            import warnings, google.generativeai as genai
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                genai.configure(api_key=cfg.GEMINI_API_KEY)
+                model = genai.GenerativeModel("gemini-2.0-flash",
+                    generation_config={"temperature": 0.1, "max_output_tokens": 4096})
+                raw = model.generate_content(prompt).text.strip()
+
+        import re as _re
+        raw = _re.sub(r'^```(?:json)?\s*', '', raw)
+        raw = _re.sub(r'\s*```$', '', raw).strip()
         result = json.loads(raw)
-        print(f"[patcher] {cve_id} (Claude Sonnet) → patch generated: {result.get('summary', '')[:80]}")
+        print(f"[patcher] {cve_id} (Gemini) → patch generated: {result.get('summary', '')[:80]}")
         return result
     except Exception as e:
-        print(f"[patcher] Claude error for {cve_id}: {e}")
+        if "429" in str(e) or "quota" in str(e).lower():
+            print(f"[patcher] Gemini quota exhausted for {cve_id}")
+        else:
+            print(f"[patcher] Gemini error for {cve_id}: {e}")
         return None
+
+
+def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
+    """
+    No API available or quota exhausted — export prompt, wait for manual response.
+    Interactive: pauses and waits. Non-interactive: exports and skips.
+    """
+    import sys
+    patches_dir = _patches_dir()
+    prompt_file   = patches_dir / f"patch_prompt_{cve_id}.txt"
+    response_file = patches_dir / f"patch_response_{cve_id}.json"
+
+    # Already have a saved response — load it
+    if response_file.exists():
+        try:
+            result = json.loads(response_file.read_text())
+            print(f"[patcher] {cve_id} → loaded manual patch response")
+            return result
+        except Exception as e:
+            print(f"[patcher] {cve_id} — invalid response JSON: {e}")
+            return None
+
+    # Export prompt file
+    prompt_file.write_text(prompt)
+
+    if not sys.stdin.isatty():
+        # Non-interactive (CI/cron) — export and skip, pipeline continues
+        print(f"[patcher] {cve_id} — prompt exported (no API), skipping code patch")
+        print(f"  Run export_patches.sh to bundle and send to AI")
+        return None
+
+    # Interactive — pause and wait
+    print(f"\n[patcher] ── Manual patch needed: {cve_id} ──")
+    print(f"  Prompt saved → {prompt_file.resolve()}")
+    print(f"  1. Open the file above and paste into Claude / ChatGPT")
+    print(f"  2. Save the JSON response to:")
+    print(f"     {response_file.resolve()}")
+    print(f"  Press Enter when saved  |  S to skip this CVE")
+
+    import select
+    while True:
+        ready, _, _ = select.select([sys.stdin], [], [], 3.0)
+        if ready:
+            choice = sys.stdin.readline().strip().lower()
+            if choice == "s":
+                print(f"[patcher] Skipping {cve_id}")
+                return None
+            break
+        # Check if file appeared
+        if response_file.exists():
+            break
+        print(f"  Waiting for {response_file.name}...", end="\r", flush=True)
+
+    if response_file.exists():
+        try:
+            result = json.loads(response_file.read_text())
+            print(f"[patcher] {cve_id} → manual patch loaded")
+            return result
+        except Exception as e:
+            print(f"[patcher] {cve_id} — invalid JSON: {e}")
+    return None
 
 
 def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: dict):
