@@ -36,7 +36,7 @@ from typing import Optional
 import requests
 
 from sage.config import cfg
-from sage.utils.colors import cprint
+from sage.utils.colors import cprint, log_error, log_security
 
 
 PATCHES_DIR = Path("data/patches")
@@ -126,14 +126,14 @@ def run_github_pr(
     commit_msg = _build_commit_message(confirmed, all_cves)
     ok, err = _git_commit(repo_path, commit_msg)
     if not ok:
-        cprint(f"[github] Commit failed: {err}")
+        log_error("github", "Commit failed", err)
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": err}
 
     # Step 4 — Push
     ok, err = _git_push(repo_path, branch)
     if not ok:
-        cprint(f"[github] Push failed: {err}")
+        log_error("github", "Push failed", err)
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": err}
 
@@ -263,7 +263,8 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
                 repo_root = repo.resolve()
                 dst = (repo_root / original_path).resolve()
                 if not str(dst).startswith(str(repo_root) + "/") and dst != repo_root:
-                    cprint(f"[github] SECURITY: manifest path {original_path!r} escapes repo root — skipping")
+                    log_security("github", "Manifest path escapes repo root — skipping",
+                                 f"path={original_path!r}")
                     continue
 
                 if not patched_file.exists():
@@ -302,7 +303,8 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
     for original_path, content in merged.items():
         dst = (repo_root / original_path).resolve()
         if not str(dst).startswith(str(repo_root) + "/"):
-            cprint(f"[github] SECURITY: refusing to write outside repo root: {original_path!r}")
+            log_security("github", "Refusing to write outside repo root",
+                         f"path={original_path!r}")
             continue
         dst.write_text(content)
         cves_str = ", ".join(file_cves[original_path])
@@ -504,11 +506,11 @@ def _create_github_pr(
         if pr_resp.status_code in (200, 201):
             return pr_resp.json().get("html_url")
         else:
-            cprint(f"[github] API error {pr_resp.status_code}: {pr_resp.text[:200]}")
+            log_error("github", f"GitHub API error {pr_resp.status_code}", pr_resp.text[:200])
             return None
 
     except Exception as e:
-        cprint(f"[github] PR creation error: {e}")
+        log_error("github", "PR creation failed", str(e))
         return None
 
 

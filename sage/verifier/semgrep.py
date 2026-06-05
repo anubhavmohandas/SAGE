@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.scanner.semgrep import CWE_TO_RULES, _EXT_TO_DEFAULTS, DEFAULT_RULES_PYTHON
-from sage.utils.colors import cprint
+from sage.utils.colors import cprint, log_error, log_warn_panel
 
 
 def _patches_dir() -> Path:
@@ -193,7 +193,8 @@ def _run_semgrep_on_file(file_path: str, rules: list[str]) -> list[dict]:
         return findings
 
     except subprocess.TimeoutExpired:
-        cprint(f"[verifier] Semgrep timeout on {file_path}")
+        log_warn_panel("verifier", f"Semgrep timed out on {Path(file_path).name}",
+                       "Patch file skipped — result may be incomplete")
         return []
     except (json.JSONDecodeError, Exception):
         return []

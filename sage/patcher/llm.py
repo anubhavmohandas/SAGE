@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.config import cfg
-from sage.utils.colors import cprint
+from sage.utils.colors import cprint, log_error, log_security, log_warn_panel
 from sage.utils.validate import validate_patcher_response
 
 
@@ -265,9 +265,10 @@ def _call_gemini_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
         return result
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower():
-            cprint(f"[patcher] Gemini quota exhausted for {cve_id}")
+            log_warn_panel("patcher", f"Gemini quota exhausted for {cve_id}",
+                           "Will fall back to Claude or manual patch")
         else:
-            cprint(f"[patcher] Gemini error for {cve_id}: {e}")
+            log_error("patcher", f"Gemini error for {cve_id}", str(e))
         return None
 
 
@@ -291,7 +292,7 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
             cprint(f"[patcher] {cve_id} → loaded manual patch response")
             return result
         except Exception as e:
-            cprint(f"[patcher] {cve_id} — invalid response JSON: {e}")
+            log_error("patcher", f"{cve_id} — invalid response JSON", str(e))
             return None
 
     # Export prompt file
@@ -334,7 +335,7 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
             cprint(f"[patcher] {cve_id} → manual patch loaded")
             return result
         except Exception as e:
-            cprint(f"[patcher] {cve_id} — invalid JSON: {e}")
+            log_error("patcher", f"{cve_id} — invalid JSON in manual response", str(e))
     return None
 
 
@@ -353,7 +354,8 @@ def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: di
         repo_root     = Path(repo_path).resolve()
         original_path = (repo_root / file_rel).resolve()
         if not str(original_path).startswith(str(repo_root) + "/") and original_path != repo_root:
-            cprint(f"[patcher] SECURITY: file_rel {file_rel!r} escapes repo root — skipping")
+            log_security("patcher", "LLM-supplied path escapes repo root — skipping",
+                         f"file_rel={file_rel!r}")
             continue
 
         original_code = ""

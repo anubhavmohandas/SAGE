@@ -22,9 +22,9 @@ Teaching note — CWE to Semgrep rule mapping:
     CWE-89  (SQL injection)      → p/sql-injection
     CWE-79  (XSS)                → p/xss
     CWE-78  (Command injection)  → p/command-injection
-    CWE-22  (Path traversal)     → p/path-traversal
-    CWE-400 (ReDoS)              → p/regex
-    CWE-502 (Deserialization)    → p/deserialization
+    CWE-22  (Path traversal)     → p/security-audit  (no dedicated pack)
+    CWE-400 (ReDoS)              → p/security-audit  (no dedicated pack)
+    CWE-502 (Deserialization)    → p/security-audit  (no dedicated pack)
     Default fallback             → p/python (general Python rules)
 """
 
@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.synapse.mapper import get_blast_radius
-from sage.utils.colors import cprint
+from sage.utils.colors import cprint, log_error, log_warn_panel
 
 
 # CWE → Semgrep rule pack mapping
@@ -53,16 +53,16 @@ CWE_TO_RULES = {
     "CWE-96":  ["p/security-audit"],                             # Static code injection
     "CWE-643": ["p/security-audit"],                             # XPath injection
     # Path / File
-    "CWE-22":  ["p/path-traversal"],                             # Path Traversal
-    "CWE-23":  ["p/path-traversal"],                             # Relative path traversal
-    "CWE-36":  ["p/path-traversal"],                             # Absolute path traversal
+    "CWE-22":  ["p/security-audit"],                             # Path Traversal
+    "CWE-23":  ["p/security-audit"],                             # Relative path traversal
+    "CWE-36":  ["p/security-audit"],                             # Absolute path traversal
     "CWE-434": ["p/security-audit"],                             # Unrestricted file upload
-    "CWE-73":  ["p/path-traversal"],                             # External control of file name
+    "CWE-73":  ["p/security-audit"],                             # External control of file name
     # Crypto / Secrets
-    "CWE-327": ["p/cryptography"],                               # Weak crypto algorithm
-    "CWE-326": ["p/cryptography"],                               # Inadequate encryption strength
-    "CWE-330": ["p/cryptography"],                               # Insufficient randomness
-    "CWE-331": ["p/cryptography"],                               # Insufficient entropy
+    "CWE-327": ["p/security-audit"],                             # Weak crypto algorithm
+    "CWE-326": ["p/security-audit"],                             # Inadequate encryption strength
+    "CWE-330": ["p/security-audit"],                             # Insufficient randomness
+    "CWE-331": ["p/security-audit"],                             # Insufficient entropy
     "CWE-312": ["p/secrets"],                                    # Cleartext storage
     "CWE-319": ["p/secrets"],                                    # Cleartext transmission
     "CWE-798": ["p/secrets"],                                    # Hardcoded credentials
@@ -76,17 +76,17 @@ CWE_TO_RULES = {
     "CWE-384": ["p/security-audit"],                             # Session fixation
     "CWE-613": ["p/security-audit"],                             # Insufficient session expiration
     # Deserialization / Memory
-    "CWE-502": ["p/deserialization"],                            # Unsafe deserialization
+    "CWE-502": ["p/security-audit"],                             # Unsafe deserialization
     "CWE-119": ["p/security-audit"],                             # Buffer overflow
     "CWE-125": ["p/security-audit"],                             # Out-of-bounds read
     "CWE-787": ["p/security-audit"],                             # Out-of-bounds write
     # Network / SSRF
-    "CWE-918": ["p/ssrf"],                                       # SSRF
+    "CWE-918": ["p/security-audit"],                             # SSRF
     "CWE-611": ["p/security-audit"],                             # XXE / XML injection
     "CWE-601": ["p/security-audit"],                             # Open redirect
     "CWE-295": ["p/security-audit"],                             # Improper cert validation
     # DoS / Resource
-    "CWE-400": ["p/regex", "p/security-audit"],                  # Resource exhaustion / ReDoS
+    "CWE-400": ["p/security-audit"],                             # Resource exhaustion / ReDoS
     "CWE-770": ["p/security-audit"],                             # Unrestricted resource allocation
     "CWE-776": ["p/security-audit"],                             # Recursive entity expansion
     "CWE-835": ["p/security-audit"],                             # Infinite loop
@@ -112,17 +112,17 @@ CWE_TO_RULES = {
 # Covers Python and JS/TS packages
 LIBRARY_RULES = {
     # ── Python: Web frameworks ────────────────────────────────────────────────
-    "aiohttp":      ["p/aiohttp"],
+    "aiohttp":      ["p/security-audit"],
     "flask":        ["p/flask"],
     "django":       ["p/django"],
     "fastapi":      ["p/security-audit"],
     "starlette":    ["p/security-audit"],
     "tornado":      ["p/security-audit"],
     # ── Python: HTTP clients ──────────────────────────────────────────────────
-    "requests":     ["p/ssrf"],
-    "httpx":        ["p/ssrf"],
-    "urllib3":      ["p/ssrf"],
-    "httplib2":     ["p/ssrf"],
+    "requests":     ["p/security-audit"],
+    "httpx":        ["p/security-audit"],
+    "urllib3":      ["p/security-audit"],
+    "httplib2":     ["p/security-audit"],
     # ── Python: Database ──────────────────────────────────────────────────────
     "sqlalchemy":   ["p/sql-injection"],
     "pymongo":      ["p/security-audit"],
@@ -132,17 +132,17 @@ LIBRARY_RULES = {
     # ── Python: Auth / Crypto ─────────────────────────────────────────────────
     "jwt":          ["p/jwt"],
     "pyjwt":        ["p/jwt"],
-    "cryptography": ["p/cryptography"],
+    "cryptography": ["p/security-audit"],
     "paramiko":     ["p/security-audit"],
-    "pyopenssl":    ["p/cryptography"],
+    "pyopenssl":    ["p/security-audit"],
     # ── Python: Parsing / Serialization ──────────────────────────────────────
-    "pyyaml":       ["p/deserialization"],
-    "yaml":         ["p/deserialization"],
-    "pickle":       ["p/deserialization"],
+    "pyyaml":       ["p/security-audit"],
+    "yaml":         ["p/security-audit"],
+    "pickle":       ["p/security-audit"],
     "lxml":         ["p/security-audit"],
     "xmltodict":    ["p/security-audit"],
     # ── Python: DNS / Network ─────────────────────────────────────────────────
-    "dnspython":    ["p/regex"],
+    "dnspython":    ["p/security-audit"],
     "scapy":        ["p/security-audit"],
     # ── Python: Shell / Process ───────────────────────────────────────────────
     "subprocess":   ["p/command-injection"],
@@ -153,20 +153,20 @@ LIBRARY_RULES = {
     "mako":         ["p/xss"],
 
     # ── JS/TS: Web frameworks ─────────────────────────────────────────────────
-    "express":      ["p/express", "p/security-audit"],
+    "express":      ["p/expressjs", "p/security-audit"],
     "koa":          ["p/security-audit"],
     "hapi":         ["p/security-audit"],
     "fastify":      ["p/security-audit"],
     "next":         ["p/nextjs", "p/security-audit"],
     "nuxt":         ["p/security-audit"],
     # ── JS/TS: HTTP clients ───────────────────────────────────────────────────
-    "axios":        ["p/ssrf"],
-    "node_fetch":   ["p/ssrf"],
-    "got":          ["p/ssrf"],
-    "superagent":   ["p/ssrf"],
-    "request":      ["p/ssrf"],
+    "axios":        ["p/security-audit"],
+    "node_fetch":   ["p/security-audit"],
+    "got":          ["p/security-audit"],
+    "superagent":   ["p/security-audit"],
+    "request":      ["p/security-audit"],
     # ── JS/TS: Database ───────────────────────────────────────────────────────
-    "mongoose":     ["p/nosql-injection", "p/security-audit"],
+    "mongoose":     ["p/security-audit"],
     "sequelize":    ["p/sql-injection"],
     "pg":           ["p/sql-injection"],
     "mysql2":       ["p/sql-injection"],
@@ -174,15 +174,15 @@ LIBRARY_RULES = {
     "knex":         ["p/sql-injection"],
     "typeorm":      ["p/sql-injection"],
     # ── JS/TS: Auth / Crypto ──────────────────────────────────────────────────
-    "jsonwebtoken": ["p/jwt"],
+    "jsonwebtoken": ["p/jwt"],           # jwt pack exists
     "passport":     ["p/security-audit"],
     "bcrypt":       ["p/security-audit"],
     "bcryptjs":     ["p/security-audit"],
-    "crypto":       ["p/cryptography"],
+    "crypto":       ["p/security-audit"],
     # ── JS/TS: Parsing / Serialization ────────────────────────────────────────
-    "serialize_javascript": ["p/deserialization"],
-    "node_serialize":       ["p/deserialization"],
-    "js_yaml":      ["p/deserialization"],
+    "serialize_javascript": ["p/security-audit"],
+    "node_serialize":       ["p/security-audit"],
+    "js_yaml":      ["p/security-audit"],
     "xml2js":       ["p/security-audit"],
     "fast_xml_parser": ["p/security-audit"],
     # ── JS/TS: Template engines / XSS surface ────────────────────────────────
@@ -197,8 +197,8 @@ LIBRARY_RULES = {
     "shelljs":      ["p/command-injection"],
     "execa":        ["p/command-injection"],
     # ── JS/TS: File / Path ────────────────────────────────────────────────────
-    "multer":       ["p/path-traversal", "p/security-audit"],
-    "formidable":   ["p/path-traversal", "p/security-audit"],
+    "multer":       ["p/security-audit"],
+    "formidable":   ["p/security-audit"],
     # ── JS/TS: Networking / WebSocket ────────────────────────────────────────
     "socket_io":    ["p/security-audit"],
     "ws":           ["p/security-audit"],
@@ -348,7 +348,8 @@ def _run_semgrep(file_path: str, rules: list[str], cve_id: str) -> list[dict]:
 
             if result.returncode not in (0, 1):
                 # 0 = no findings, 1 = findings found, anything else = error
-                cprint(f"[scanner] Semgrep error on {file_path}: {result.stderr[:200]}")
+                log_error("scanner", f"Semgrep error on {Path(file_path).name}",
+                          result.stderr[:300])
                 continue
 
             if not result.stdout.strip():
@@ -359,14 +360,17 @@ def _run_semgrep(file_path: str, rules: list[str], cve_id: str) -> list[dict]:
                 findings.append(_parse_finding(match, cve_id, rule))
 
         except subprocess.TimeoutExpired:
-            cprint(f"[scanner] Semgrep timed out on {file_path}")
+            log_warn_panel("scanner", f"Semgrep timed out on {Path(file_path).name}",
+                           "File skipped — increase timeout if this recurs")
         except json.JSONDecodeError:
-            cprint(f"[scanner] Could not parse Semgrep output for {file_path}")
+            log_error("scanner", f"Could not parse Semgrep JSON output",
+                      f"file={Path(file_path).name}")
         except FileNotFoundError:
-            cprint("[scanner] Semgrep not found. Install: pip3 install semgrep")
+            log_error("scanner", "Semgrep not installed",
+                      "Run: pip3 install semgrep")
             break
         except Exception as e:
-            cprint(f"[scanner] Unexpected error: {e}")
+            log_error("scanner", "Unexpected Semgrep error", str(e))
 
     return findings
 

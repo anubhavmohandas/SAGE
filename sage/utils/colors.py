@@ -84,6 +84,53 @@ def log_fail(module: str, msg: str):
     log(module, msg, "fail")
 
 
+def log_error(module: str, msg: str, detail: str = ""):
+    """
+    Structured error panel — for hard failures that need to stand out.
+    Use instead of cprint() when something genuinely went wrong and
+    the user needs to see it clearly (not just in a wall of dim output).
+
+    Example:
+        log_error("patcher", "Path traversal blocked", "file_rel='../../etc/passwd'")
+    """
+    title = f"[bold red]✗ [{module.upper()}] Error[/bold red]"
+    body  = f"[red]{msg}[/red]"
+    if detail:
+        body += f"\n[dim]{detail}[/dim]"
+    console.print(Panel(body, title=title, border_style="red", padding=(0, 1)))
+
+
+def log_security(module: str, msg: str, detail: str = ""):
+    """
+    Security-specific alert panel — for SECURITY-tagged events
+    (path traversal blocks, schema rejections, permission violations).
+    Rendered in bold red with a ⚠ SECURITY prefix so they're impossible to miss.
+
+    Example:
+        log_security("github", "Manifest path escapes repo root", "path='../../../etc'")
+    """
+    title = f"[bold red]⚠ SECURITY — {module.upper()}[/bold red]"
+    body  = f"[bold red]{msg}[/bold red]"
+    if detail:
+        body += f"\n[dim red]{detail}[/dim red]"
+    console.print(Panel(body, title=title, border_style="red", padding=(0, 1)))
+
+
+def log_warn_panel(module: str, msg: str, detail: str = ""):
+    """
+    Warning panel — for non-fatal issues that shouldn't be buried in log noise.
+    Yellow border, softer than log_error.
+
+    Example:
+        log_warn_panel("fetcher", "NVD rate limit hit — retrying", "wait=30s")
+    """
+    title = f"[bold yellow]⚡ [{module.upper()}] Warning[/bold yellow]"
+    body  = f"[yellow]{msg}[/yellow]"
+    if detail:
+        body += f"\n[dim]{detail}[/dim]"
+    console.print(Panel(body, title=title, border_style="yellow", padding=(0, 1)))
+
+
 def log_cve(module: str, cve_id: str, severity: str, msg: str):
     style = SEVERITY_STYLE.get(severity.upper(), "info")
     sev_text = Text(f"[{severity:8s}]", style=style)

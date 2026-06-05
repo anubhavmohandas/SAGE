@@ -20,7 +20,7 @@ Design:
 from __future__ import annotations
 import re
 from typing import Optional
-from sage.utils.colors import cprint
+from sage.utils.colors import cprint, log_error, log_security
 
 
 # ── Analyzer response ─────────────────────────────────────────────────────────
@@ -42,7 +42,8 @@ def validate_analyzer_response(raw: dict, cve_id: str) -> Optional[dict]:
     Never raises — all errors are logged and return None.
     """
     if not isinstance(raw, dict):
-        cprint(f"[validate] {cve_id}: analyzer response is not a dict (got {type(raw).__name__})")
+        log_error("validate", f"{cve_id}: analyzer response is not a dict",
+                  f"got {type(raw).__name__}")
         return None
 
     # ── vulnerable (bool, required) ───────────────────────────────────────────
@@ -129,7 +130,8 @@ def validate_patcher_response(raw: dict, cve_id: str) -> Optional[dict]:
     path traversal — any entry that fails is dropped (not fatal).
     """
     if not isinstance(raw, dict):
-        cprint(f"[validate] {cve_id}: patcher response is not a dict (got {type(raw).__name__})")
+        log_error("validate", f"{cve_id}: patcher response is not a dict",
+                  f"got {type(raw).__name__}")
         return None
 
     # ── patched_files (list, required) ───────────────────────────────────────
@@ -150,7 +152,8 @@ def validate_patcher_response(raw: dict, cve_id: str) -> Optional[dict]:
     if not clean_files and patched_files_raw:
         # All entries failed validation (e.g. all were path traversal attempts)
         # Return empty list — patcher will proceed with dep-bump only, which is safe
-        cprint(f"[validate] {cve_id}: all patched_files entries failed validation — no code patches will apply")
+        log_error("validate", f"{cve_id}: all patched_files entries failed validation",
+                  "No code patches will apply — dep-bump will still proceed")
 
     # ── optional fields ───────────────────────────────────────────────────────
     summary     = _safe_str(raw.get("summary", ""),     cve_id, "summary")
@@ -178,7 +181,8 @@ def _validate_patch_entry(entry: dict, cve_id: str, idx: int) -> Optional[dict]:
         return None
     file_rel = file_rel.strip()
     if _is_path_traversal(file_rel):
-        cprint(f"[validate] {cve_id}: patched_files[{idx}].file looks like path traversal: {file_rel!r} — dropped")
+        log_security("validate", f"{cve_id}: path traversal attempt in LLM response — dropped",
+                     f"patched_files[{idx}].file = {file_rel!r}")
         return None
 
     # original_function (str, required)
