@@ -1,31 +1,50 @@
 @echo off
 REM import_responses.bat — Split AI's combined response into individual CVE JSON files
-REM Usage: import_responses.bat [repo_name]
+REM Usage: import_responses.bat [repo_name] [path\to\response_file.txt]
 REM Example: import_responses.bat CyberTrace
+REM          import_responses.bat CyberTrace C:\Users\you\Downloads\ai_response.txt
 
-setlocal
+setlocal enabledelayedexpansion
 
 set REPO=%1
+set RESPONSES_FILE=%2
+
 if "%REPO%"=="" (
     for /f "delims=" %%d in ('dir /b /ad /o-d data\ 2^>nul') do (
         if "!REPO!"=="" set REPO=%%d
     )
 )
 if "%REPO%"=="" (
-    echo Usage: import_responses.bat ^<repo_name^>
+    echo Usage: import_responses.bat ^<repo_name^> [response_file]
     exit /b 1
 )
 
-set RESPONSES_FILE=data\%REPO%\all_responses.txt
 set RESPONSES_DIR=data\%REPO%\responses
+if not exist "%RESPONSES_DIR%" mkdir "%RESPONSES_DIR%"
+
+REM If no file provided, open Windows file picker via PowerShell
+if "%RESPONSES_FILE%"=="" (
+    echo [sage] Select the AI response file...
+    for /f "delims=" %%f in ('powershell -NoProfile -Command ^
+        "Add-Type -AssemblyName System.Windows.Forms; ^
+        $d = New-Object System.Windows.Forms.OpenFileDialog; ^
+        $d.Title = 'Select AI response file'; ^
+        $d.Filter = 'Text files (*.txt)|*.txt|All files (*.*)|*.*'; ^
+        $d.InitialDirectory = [Environment]::GetFolderPath('UserProfile') + '\Downloads'; ^
+        if ($d.ShowDialog() -eq 'OK') { $d.FileName } else { '' }"') do (
+        set RESPONSES_FILE=%%f
+    )
+)
+
+if "%RESPONSES_FILE%"=="" (
+    echo [sage] No file selected.
+    exit /b 1
+)
 
 if not exist "%RESPONSES_FILE%" (
-    echo [sage] Response file not found: %RESPONSES_FILE%
-    echo        Save the AI's full response there, then re-run.
+    echo [sage] File not found: %RESPONSES_FILE%
     exit /b 1
 )
-
-if not exist "%RESPONSES_DIR%" mkdir "%RESPONSES_DIR%"
 
 echo [sage] Parsing %RESPONSES_FILE% ...
 
