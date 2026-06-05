@@ -1,8 +1,11 @@
+![Uploading image.png…]()
+
 # SAGE — Security Analysis & Graph Engine
 
 > **Your codebase as a knowledge graph. CVEs as signals on top of it.**
 
 SAGE is an autonomous security pipeline that scans repositories, maps their structure into an interactive knowledge graph, finds CVEs affecting the stack, confirms exploitability with AI, generates patches, and raises GitHub PRs — all from one command.
+
 
 ```
 python3 main.py --repo /path/to/your/repo
