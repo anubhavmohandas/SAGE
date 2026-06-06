@@ -2,7 +2,8 @@
 # All versions pinned. Verify latest on PyPI before updating.
 
 # Environment
-python-dotenv>=1.2.2  # SAGE: CVE-2026-28684
+python-dotenv==1.2.2   # .env loader (latest on PyPI; removed an unverified
+                       # CVE-2026-28684 comment that could not be confirmed)
 
 # HTTP client — NVD API calls
 requests==2.32.3
@@ -25,6 +26,10 @@ networkx==3.4.2
 
 # JSON schema validation — defend against malformed CVE data
 jsonschema==4.23.0
+
+# Terminal output — used throughout sage/utils/colors.py
+# (was missing here but installed in CI; required or imports fail)
+rich==15.0.0
 
 # Database
 # sqlite3 is built into Python stdlib — no install needed

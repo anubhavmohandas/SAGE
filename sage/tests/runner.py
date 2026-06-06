@@ -19,12 +19,70 @@ Decision gate:
 
 import json
 import subprocess
+import os
 import sys
 from pathlib import Path
 from typing import Optional
 
 from sage.config import cfg
 from sage.utils.colors import cprint
+
+
+# ─── Security: clean environment for executing untrusted code ──────────────────
+#
+# H1 mitigation. SAGE installs the scanned repo's dependencies (pip runs its
+# build hooks) and runs its tests + LLM-generated test code as child processes.
+# Child processes inherit the parent's environment by default — which means a
+# malicious setup.py or test could read SAGE's API keys/tokens straight out of
+# os.environ and exfiltrate them, even though .env is never leaked to git.
+#
+# Defence: every subprocess that runs scanned-repo or LLM-generated code is
+# launched with a scrubbed environment built from an ALLOWLIST. Only known-safe
+# variables pass through; anything else (including any future secret you add to
+# .env) is excluded by default rather than by remembering to deny it.
+#
+# This is a backstop, NOT a sandbox. The real isolation is: scan untrusted repos
+# in a disposable VM / container (see README "Running on untrusted repos").
+
+# Vars genuinely needed for pip/pytest/python to function.
+_ENV_ALLOWLIST = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "TMPDIR", "TEMP", "TMP",
+    "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
+    # Python / virtualenv
+    "PYTHONPATH", "PYTHONHOME", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE",
+    "VIRTUAL_ENV", "PYENV_ROOT", "PYENV_VERSION",
+    # pip behaviour (no secrets) — keep proxy/cache/index config working
+    "PIP_CACHE_DIR", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_NO_CACHE_DIR",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+    # Windows essentials
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "APPDATA", "LOCALAPPDATA",
+    "PROGRAMFILES", "PROGRAMDATA", "COMSPEC", "PATHEXT", "NUMBER_OF_PROCESSORS",
+})
+
+
+def _clean_env() -> dict:
+    """
+    Return an environment dict containing only allowlisted variables.
+
+    Used for every subprocess that executes untrusted (scanned-repo or
+    LLM-generated) code, so SAGE's secrets are never exposed to that code.
+    """
+    return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
+
+
+def _untrusted_exec_warning(repo_path: str) -> None:
+    """Print an honest, one-time-ish warning before executing scanned code."""
+    cprint(
+        "\n[tests] ⚠️  SECURITY: SAGE is about to EXECUTE code from the scanned "
+        f"repo ({repo_path})\n"
+        "[tests]    This runs its dependency build hooks (pip) and its tests on "
+        "THIS machine.\n"
+        "[tests]    SAGE's own API keys are scrubbed from these subprocesses, "
+        "but this is NOT a sandbox.\n"
+        "[tests]    For UNTRUSTED repos, run SAGE inside a disposable VM/"
+        "container instead.\n"
+    )
 
 
 def _tests_dir() -> Path:
@@ -125,6 +183,9 @@ def _run_existing_tests(repo_path: str) -> dict:
 
     cprint(f"[tests] Found test locations: {[str(t) for t in test_locations[:3]]}")
 
+    # SECURITY: from here on we execute scanned-repo code. Warn + scrub env.
+    _untrusted_exec_warning(repo_path)
+
     # Install repo's deps if requirements.txt exists
     _install_repo_deps(repo_path)
 
@@ -137,6 +198,7 @@ def _run_existing_tests(repo_path: str) -> dict:
             text=True,
             timeout=120,
             cwd=repo_path,
+            env=_clean_env(),  # SECURITY: no SAGE secrets in scanned-code env
         )
         output = result.stdout + result.stderr
 
@@ -228,6 +290,7 @@ def _install_repo_deps(repo_path: str):
             capture_output=True,
             text=True,
             timeout=120,
+            env=_clean_env(),  # SECURITY: pip runs build hooks — no SAGE secrets
         )
         if result.returncode == 0:
             cprint(f"[tests] Deps installed OK")
@@ -246,6 +309,7 @@ def _run_unittest(repo_path: str) -> dict:
             text=True,
             timeout=120,
             cwd=repo_path,
+            env=_clean_env(),  # SECURITY: no SAGE secrets in scanned-code env
         )
         passed = result.returncode == 0
         output = result.stdout + result.stderr
@@ -313,6 +377,7 @@ def _generate_and_run_security_tests(
             capture_output=True,
             text=True,
             timeout=60,
+            env=_clean_env(),  # SECURITY: LLM-generated tests — no SAGE secrets
         )
         passed = result.returncode == 0
         output = result.stdout + result.stderr

@@ -165,6 +165,18 @@
 <div id="zoom-label">100%</div>
 
 <script>
+// ─── SECURITY: HTML escaping for untrusted data ────────────────────────────────
+// Node labels, function/symbol names, file paths and CVE fields rendered below
+// are parsed from the SCANNED codebase / CVE feed and are therefore untrusted.
+// Interpolating them raw into innerHTML is stored XSS (e.g. a scanned repo with a
+// function named `<img src=x onerror=...>`). esc() neutralises HTML
+// metacharacters for all such values before they reach innerHTML.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 // ─── THEME ───────────────────────────────────────────────────────────────────
 let isDark = true;
 const themeBtn = document.getElementById('theme-toggle');
@@ -758,7 +770,7 @@ canvas.addEventListener('mousemove', e => {
     tooltip.style.display = 'block';
     tooltip.style.left = (sx+16) + 'px';
     tooltip.style.top  = (sy-12) + 'px';
-    let html = `<b style="color:${node.color}">${node.label}</b><br>${node.info.replace(/\n/g,'<br>')}`;
+    let html = `<b style="color:${esc(node.color)}">${esc(node.label)}</b><br>${esc(node.info).replace(/\n/g,'<br>')}`;
     const links = connCount[id];
     if (links) html += `<br><span style="opacity:.55">→ ${links} connection${links>1?'s':''}</span>`;
     if (id!==centerNodeId && node.children.length>0) html += `<br><span style="opacity:.35;font-size:9px">click to drill in</span>`;
@@ -969,32 +981,43 @@ function _buildAttackPanel() {
     return;
   }
 
+  // SECURITY: sev, step, entryType, cve_id below are untrusted (scanned code /
+  // CVE feed) — every interpolation is escaped. The click handler uses a
+  // data-attribute + delegation instead of an inline onclick to avoid building
+  // executable JS from cve_id.
   content.innerHTML = ATTACK_PATHS.map(ap => {
-    const sev = ap.severity || 'UNKNOWN';
+    const sevRaw = ap.severity || 'UNKNOWN';
+    // Whitelist severity to a known class set; never inject it into a CSS class raw.
+    const sevClass = /^[A-Z]+$/.test(sevRaw) ? sevRaw : 'UNKNOWN';
     const pathsHtml = (ap.paths || []).slice(0, 4).map(p => {
       // Render as vertical hop chain instead of flat arrow string
-      const hops = p.path.map((step, i) => {
+      const hops = (p.path || []).map((step, i) => {
         const isLast = i === p.path.length - 1;
         return `<div style="display:flex;align-items:center;gap:5px;margin:1px 0;">
           <span style="opacity:0.4;font-size:8px;">${isLast ? '▶' : '↓'}</span>
-          <span style="color:${isLast ? '#ff8080' : 'inherit'};font-weight:${isLast?'bold':'normal'}">${step}</span>
+          <span style="color:${isLast ? '#ff8080' : 'inherit'};font-weight:${isLast?'bold':'normal'}">${esc(step)}</span>
         </div>`;
       }).join('');
       const entryType = (p.entry_type || '').replace(/_/g,' ').toUpperCase();
       return `<div class="ap-path">
-        <div class="ap-entry-type" style="margin-bottom:4px;">${entryType}</div>
+        <div class="ap-entry-type" style="margin-bottom:4px;">${esc(entryType)}</div>
         ${hops}
         <div style="margin-top:5px;padding:2px 6px;border-radius:3px;background:rgba(255,80,80,0.12);color:#ff8080;font-size:8px;letter-spacing:1px;display:inline-block;">
-          REACHABLE &nbsp;·&nbsp; ${p.depth} hop${p.depth!==1?'s':''}
+          REACHABLE &nbsp;·&nbsp; ${esc(p.depth)} hop${p.depth!==1?'s':''}
         </div>
       </div>`;
     }).join('');
 
-    return `<div class="ap-cve" data-cve="${ap.cve_id}" onclick="_selectAttackPath('${ap.cve_id}')">
-      <div class="ap-cve-title">${ap.cve_id}<span class="ap-sev sev-${sev}">${sev}</span></div>
+    return `<div class="ap-cve" data-cve="${esc(ap.cve_id)}">
+      <div class="ap-cve-title">${esc(ap.cve_id)}<span class="ap-sev sev-${esc(sevClass)}">${esc(sevRaw)}</span></div>
       ${pathsHtml}
     </div>`;
   }).join('');
+
+  // SECURITY: event delegation replaces inline onclick — cve_id never becomes code.
+  content.querySelectorAll('.ap-cve').forEach(el => {
+    el.addEventListener('click', () => _selectAttackPath(el.getAttribute('data-cve')));
+  });
 }
 
 function _selectAttackPath(cveId) {

@@ -41,20 +41,13 @@ jobs:
 
       - name: Install SAGE dependencies
         run: |
-          # Install SAGE itself (not the scanned repo's deps)
+          # Install SAGE itself (not the scanned repo's deps).
+          # Single source of truth: requirements.txt (pinned versions).
+          # Do NOT hand-list packages here — that drifts from requirements.txt
+          # and previously installed the DEPRECATED google-generativeai and an
+          # unpinned set. requirements.txt pins google-genai (the current SDK).
           pip install --upgrade pip
-          pip install \
-            networkx \
-            requests \
-            python-dotenv \
-            packaging \
-            rich \
-            anthropic \
-            semgrep \
-            tree-sitter \
-            tree-sitter-python \
-            google-generativeai \
-            PyGithub
+          pip install -r requirements.txt
 
       - name: Configure git identity
         run: |

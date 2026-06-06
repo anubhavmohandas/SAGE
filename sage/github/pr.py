@@ -106,8 +106,8 @@ def run_github_pr(
         return {"skipped": True, "reason": err}
 
     # Step 2 — Apply patches to repo
-    applied = _apply_patches(patch_result, repo_path)
-    if not applied:
+    changed_files = _apply_patches(patch_result, repo_path)
+    if not changed_files:
         cprint("[github] Nothing applied — aborting")
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": "No files changed"}
@@ -215,9 +215,15 @@ def _git_create_branch(repo_path: str, branch: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def _apply_patches(patch_result: dict, repo_path: str) -> bool:
-    """Copy patched files into the repo."""
-    applied = False
+def _apply_patches(patch_result: dict, repo_path: str) -> list[str]:
+    """
+    Copy patched files into the repo.
+
+    Returns the list of repo-relative paths SAGE actually changed, so the commit
+    step can stage ONLY those files (never `git add -A`, which would sweep in
+    unrelated dirty files from the scanned repo's working tree).
+    """
+    changed: list[str] = []
     repo = Path(repo_path)
 
     # Apply dep bump — copy bumped requirements.txt into repo
@@ -230,7 +236,7 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
             if dst.exists():
                 dst.write_text(src.read_text())
                 cprint(f"[github] Applied dep bump → {name}")
-                applied = True
+                changed.append(name)
                 break
 
     # Apply code patches — merge all patches for the same file before writing.
@@ -309,9 +315,9 @@ def _apply_patches(patch_result: dict, repo_path: str) -> bool:
         dst.write_text(content)
         cves_str = ", ".join(file_cves[original_path])
         cprint(f"[github] Applied code patch → {original_path} ({cves_str})")
-        applied = True
+        changed.append(original_path)
 
-    return applied
+    return changed
 
 
 def _build_commit_message(confirmed: list[dict], all_cves: list[dict]) -> str:
@@ -487,6 +493,17 @@ def _create_github_pr(
             headers=headers,
             timeout=15,
         )
+        # Check status before trusting the body. On 401/403/404 the response is an
+        # error object, not repo metadata — silently defaulting to "main" would
+        # mask auth/permission failures and open the PR against the wrong base.
+        if repo_resp.status_code != 200:
+            log_error(
+                "github",
+                f"Cannot read repo {repo} (HTTP {repo_resp.status_code}) — "
+                f"check GITHUB_TOKEN scope/repo name",
+                repo_resp.text[:200],
+            )
+            return None
         default_branch = repo_resp.json().get("default_branch", "main")
 
         # Create PR

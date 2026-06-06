@@ -14,7 +14,7 @@ python3 main.py --repo /path/to/your/repo
 
 ## 🌐 Live Demo
 
-[**→ Synapse Visualization**](./sage-graph.gif)
+[**→ Synapse Visualization**](./Media/Security_graph_diagram_animation_202606060821.mp4)
 
 ---
 
