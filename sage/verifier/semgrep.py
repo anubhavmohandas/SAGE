@@ -126,11 +126,15 @@ def _verify_code_patch(cve_id: str, cwe: str, patch_dir: Path) -> dict:
       1. CWE-specific rule no longer fires (fix worked)
       2. No new issues introduced (patch is safe)
     """
-    # Find patched files — any supported language extension
-    _PATCHED_EXTS = ("*.py", "*.js", "*.jsx", "*.ts", "*.tsx")
+    # Find patched files — any supported language extension.
+    # BUG WAS HERE: glob pattern "patched_{pat[1:]}" → "patched_.py" (no wildcard),
+    # which never matched real files like "patched_cybertrace_modules_base.py".
+    # The verifier therefore always reported "No patched files found" even when a
+    # real patch existed. Correct pattern is "patched_*<ext>".
+    _PATCHED_EXTS = (".py", ".js", ".jsx", ".ts", ".tsx")
     patched_files = []
-    for pat in _PATCHED_EXTS:
-        patched_files.extend(patch_dir.glob(f"patched_{pat[1:]}"))  # e.g. patched_*.py
+    for ext in _PATCHED_EXTS:
+        patched_files.extend(patch_dir.glob(f"patched_*{ext}"))
     if not patched_files:
         return {
             "cve_id":  cve_id,
