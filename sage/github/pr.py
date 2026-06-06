@@ -84,21 +84,25 @@ def run_github_pr(
     verify_passed = verify_results.get("passed", False)
 
     # GATE: detect confirmed CVEs that were SUPPOSED to get a code patch but
-    # produced none (e.g. LLM credits exhausted, quota blown, empty {} response).
-    # Without this, SAGE would open a confident non-draft "all passed" PR that
-    # actually contains no real fixes — worse than failing visibly.
+    # produced none (e.g. LLM credits exhausted, quota blown, empty/stale
+    # response). Without this, SAGE would open a confident non-draft "all passed"
+    # PR that actually contains no real code fixes — worse than failing visibly.
+    #
+    # Source of truth = the VERIFIER's per-CVE result. The verifier reports
+    # "No patched files found" for any CVE whose patch dir has no actual patched
+    # file (a manifest can exist while the file does not — don't trust it).
     confirmed_ids = {c.get("cve_id") for c in confirmed if c.get("cve_id")}
-    patched_ids = set()
-    for p in code_patches:
-        manifest = Path(p.get("patch_dir", "")) / "manifest.json"
-        try:
-            if manifest.exists():
-                import json as _j
-                entries = _j.loads(manifest.read_text())
-                if entries:  # non-empty manifest = real patched file(s)
-                    patched_ids.add(p.get("cve_id"))
-        except Exception:
-            pass
+    empty_patch_ids = set()
+    for r in verify_results.get("code_results", []):
+        reason = (r.get("reason") or "").lower()
+        if "no patched files" in reason:
+            empty_patch_ids.add(r.get("cve_id"))
+    # A confirmed CVE is "missing a patch" if the verifier saw no patched file
+    # for it. (CVEs covered only by the dep bump still count as not-code-patched.)
+    patched_ids = {
+        r.get("cve_id") for r in verify_results.get("code_results", [])
+        if r.get("cve_id") not in empty_patch_ids
+    }
     missing_patches = sorted(confirmed_ids - patched_ids)
 
     is_draft = (not tests_passed) or bool(missing_patches)

@@ -45,6 +45,25 @@ def _patches_dir() -> Path:
 
 PATCHES_DIR = Path("data/patches")  # legacy fallback
 
+# Set at the start of each run_patcher() call. In manual mode, only response
+# files modified at/after this time are accepted as fresh; older ones are ignored
+# so stale leftovers from a previous run can't masquerade as real patches.
+_RUN_START = 0.0
+
+
+def _is_fresh(path: Path) -> bool:
+    """
+    True if the file exists and was modified during the current patcher run.
+
+    A 5s grace is subtracted from the run-start so a response saved milliseconds
+    around run start isn't falsely rejected, while genuinely stale files (from a
+    previous run, minutes/hours/days old) are still ignored.
+    """
+    try:
+        return path.exists() and path.stat().st_mtime >= (_RUN_START - 5.0)
+    except OSError:
+        return False
+
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
@@ -59,6 +78,14 @@ def run_patcher(confirmed: list[dict], repo_path: str, all_cves: list[dict] = No
                     If None, only confirmed CVEs get dep bumps.
     """
     pd = _patches_dir()
+
+    # Mark when this patcher run started. In manual mode we only accept response
+    # files SAVED DURING THIS RUN — stale patch_response_*.json left over from a
+    # previous run must NOT be silently reused (that produced "patches" with no
+    # real content). Files older than this timestamp are treated as absent.
+    import time as _time
+    global _RUN_START
+    _RUN_START = _time.time()
 
     cprint(f"[patcher] {len(confirmed)} confirmed exploitable CVE(s) → code patches")
 
@@ -290,18 +317,25 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
     prompt_file   = patches_dir / f"patch_prompt_{cve_id}.txt"
     response_file = patches_dir / f"patch_response_{cve_id}.json"
 
-    # Already have a saved response — load it
+    # Reuse a saved response if — and only if — it contains a REAL patch.
+    # Gate on CONTENT, not age: a valid prior patch is fine to reuse (no point
+    # re-asking you for work already done), but an empty/invalid leftover must be
+    # rejected (that's what silently produced "0 patches"). validate_patcher_
+    # response() returns None for empty {}/missing patched_files, so a non-None
+    # result with at least one patched_file is the signal that it's genuine.
     if response_file.exists():
         try:
-            result = json.loads(response_file.read_text())
-            result = validate_patcher_response(result, cve_id)
-            if result is None:
-                return None
-            cprint(f"[patcher] {cve_id} → loaded manual patch response")
-            return result
+            raw = json.loads(response_file.read_text())
+            result = validate_patcher_response(raw, cve_id)
+            if result is not None and result.get("patched_files"):
+                tag = "fresh" if _is_fresh(response_file) else "reused (valid, prior run)"
+                cprint(f"[patcher] {cve_id} → loaded manual patch response [{tag}]")
+                return result
+            # exists but empty/invalid → don't reuse; fall through to re-prompt
+            cprint(f"[patcher] {cve_id} — existing response is empty/invalid; "
+                   f"re-prompting for a real patch")
         except Exception as e:
-            log_error("patcher", f"{cve_id} — invalid response JSON", str(e))
-            return None
+            log_error("patcher", f"{cve_id} — invalid response JSON, re-prompting", str(e))
 
     # Export prompt file
     prompt_file.write_text(prompt)
@@ -329,12 +363,12 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
                 cprint(f"[patcher] Skipping {cve_id}")
                 return None
             break
-        # Check if file appeared
-        if response_file.exists():
+        # Check if a FRESH file appeared (saved during this run)
+        if _is_fresh(response_file):
             break
         cprint(f"  Waiting for {response_file.name}...", end="\r", flush=True)
 
-    if response_file.exists():
+    if _is_fresh(response_file):
         try:
             result = json.loads(response_file.read_text())
             result = validate_patcher_response(result, cve_id)
@@ -382,9 +416,14 @@ def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: di
 
         # Write manifest entry so github/pr.py can reconstruct paths correctly
         # (filename-based reconstruction breaks for nested paths like sage/fetcher/filter.py)
+        # Dedup: a file may be touched by multiple CVEs/entries — store each
+        # (patched_file, original_path) pair ONCE. Appending blindly across
+        # re-runs previously produced 4+ identical entries per file.
         manifest_path = patch_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else []
-        manifest.append({"patched_file": f"patched_{safe_name}", "original_path": file_rel})
+        entry = {"patched_file": f"patched_{safe_name}", "original_path": file_rel}
+        if entry not in manifest:
+            manifest.append(entry)
         manifest_path.write_text(json.dumps(manifest, indent=2))
 
         # Generate diff
