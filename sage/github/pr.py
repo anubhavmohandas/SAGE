@@ -122,9 +122,9 @@ def run_github_pr(
         _git_cleanup(repo_path, branch)
         return {"skipped": True, "reason": "Repo already patched — all fixes already on main"}
 
-    # Step 3 — Commit
+    # Step 3 — Commit (stage only the files SAGE changed, never `git add -A`)
     commit_msg = _build_commit_message(confirmed, all_cves)
-    ok, err = _git_commit(repo_path, commit_msg)
+    ok, err = _git_commit(repo_path, commit_msg, files=changed_files)
     if not ok:
         log_error("github", "Commit failed", err)
         _git_cleanup(repo_path, branch)
@@ -328,7 +328,7 @@ def _build_commit_message(confirmed: list[dict], all_cves: list[dict]) -> str:
     return f"security: bump vulnerable dependencies ({short_list})\n\nSAGE automated security patch.\nCVEs addressed: {', '.join(cve_ids)}"
 
 
-def _git_commit(repo_path: str, message: str) -> tuple[bool, str]:
+def _git_commit(repo_path: str, message: str, files: Optional[list[str]] = None) -> tuple[bool, str]:
     try:
         # Check what's staged before committing
         status = subprocess.run(
@@ -338,10 +338,22 @@ def _git_commit(repo_path: str, message: str) -> tuple[bool, str]:
         if not status.stdout.strip():
             return False, "nothing to commit — file content identical to branch HEAD (already patched?)"
 
+        # Stage ONLY the files SAGE patched. Never `git add -A` — that would sweep
+        # in unrelated dirty/untracked files from the scanned repo's working tree
+        # and ship them inside the security PR.
+        if files:
+            add_cmd = ["git", "add", "--"] + list(files)
+        else:
+            # No explicit list (shouldn't happen in normal flow) — stage tracked
+            # modifications only, never untracked files.
+            add_cmd = ["git", "add", "-u"]
         add_result = subprocess.run(
-            ["git", "add", "-A"], cwd=repo_path, capture_output=True, text=True, timeout=10
+            add_cmd, cwd=repo_path, capture_output=True, text=True, timeout=10
         )
+        if add_result.returncode != 0:
+            return False, (add_result.stderr.strip() or "git add failed")
 
+        # Commit only what we just staged (avoid -a which would re-add everything).
         result = subprocess.run(
             ["git", "commit", "-m", message],
             cwd=repo_path, capture_output=True, text=True, timeout=10,

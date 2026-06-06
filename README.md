@@ -105,6 +105,16 @@ GITHUB_REPO=       # owner/repo
 
 ## Usage
 
+> ### ⚠️ Security: SAGE executes code from the repo it scans
+>
+> To verify patches, SAGE **installs the scanned repo's dependencies** (`pip`, which runs each package's build hooks) and **runs its test suite plus LLM-generated tests** — all as subprocesses on the machine running SAGE. A malicious or compromised target repo can therefore run code on your host.
+>
+> Mitigations already in place: those subprocesses are launched with SAGE's API keys/tokens **scrubbed from their environment** (`sage/tests/runner.py`), so scanned code cannot read your secrets.
+>
+> **This is a backstop, not a sandbox.** Operating rule:
+> - **Your own / trusted repos** → fine to scan on your normal OS.
+> - **Any untrusted or third-party repo** → run SAGE inside a **disposable VM or container** (not just "a Linux box" — it must be throwaway and network-restricted). Full containerised isolation is on the roadmap (Sage Cloud).
+
 The easiest way to run SAGE is the interactive launcher — it auto-detects your GitHub remote, asks which repo to scan, and lets you pick the CVE window:
 
 ```bash
