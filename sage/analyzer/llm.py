@@ -119,6 +119,7 @@ def analyze_findings(
     # Persist the choice pipeline-wide so the patcher and test generator respect
     # it. Without this, manual mode only applied to the analyzer and the later
     # stages would still hit the API (burning credits you chose not to spend).
+    from sage.config import cfg
     cfg.llm_mode = mode
     cprint(f"[analyzer] LLM mode for this run: {mode} (applies to analyzer, patcher, tests)")
     if mode == "api":
