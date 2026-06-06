@@ -14,7 +14,7 @@ python3 main.py --repo /path/to/your/repo
 
 ## 🌐 Live Demo
 
-[**→ Synapse Visualization**](https://anubhavmohandas.github.io/SAGE)
+[**→ Synapse Visualization**](./sage-graph.gif)
 
 ---
 
