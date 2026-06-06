@@ -46,6 +46,12 @@ def validate_analyzer_response(raw: dict, cve_id: str) -> Optional[dict]:
                   f"got {type(raw).__name__}")
         return None
 
+    # Empty {} = failed/placeholder response, not a valid verdict.
+    if not raw:
+        log_error("validate", f"{cve_id}: analyzer response is empty ({{}})",
+                  "Treating as failure, not as a verdict")
+        return None
+
     # ── vulnerable (bool, required) ───────────────────────────────────────────
     vulnerable = raw.get("vulnerable")
     if isinstance(vulnerable, bool):
@@ -132,6 +138,14 @@ def validate_patcher_response(raw: dict, cve_id: str) -> Optional[dict]:
     if not isinstance(raw, dict):
         log_error("validate", f"{cve_id}: patcher response is not a dict",
                   f"got {type(raw).__name__}")
+        return None
+
+    # Empty {} means the LLM call failed or a placeholder file was saved — it is
+    # NOT a valid "no patch needed" answer. Reject so the caller can tell the
+    # difference between a real fix and a silent no-op.
+    if not raw:
+        log_error("validate", f"{cve_id}: patcher response is empty ({{}})",
+                  "Treating as failure, not as 'no patch needed'")
         return None
 
     # ── patched_files (list, required) ───────────────────────────────────────

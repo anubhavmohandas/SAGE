@@ -193,6 +193,14 @@ def _call_claude_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
     """
     import sys
 
+    # Respect the pipeline-wide mode. If the user chose MANUAL in the analyzer,
+    # do NOT call any API here — just export the prompt and wait for the saved
+    # response. (Previously the patcher ignored the analyzer's choice and hit the
+    # API regardless, which is why manual runs still produced credit/quota errors.)
+    if getattr(cfg, "llm_mode", "api") == "manual":
+        cprint(f"[patcher] Manual mode — exporting prompt for {cve_id} (no API call)")
+        return _manual_patch(prompt, cve_id)
+
     # Check for API key first
     if not cfg.ANTHROPIC_API_KEY and not cfg.GEMINI_API_KEY:
         return _manual_patch(prompt, cve_id)

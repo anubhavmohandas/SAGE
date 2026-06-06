@@ -49,6 +49,11 @@ class Config:
     GITHUB_TOKEN: str
     GITHUB_REPO: str
     _repo_name: str = field(default="default", repr=False)
+    # Pipeline-wide LLM mode, set once by the analyzer ("api" or "manual").
+    # Patcher and test generator MUST respect this so that choosing manual mode
+    # never silently calls the API (and never burns credits/quota you didn't ask
+    # to spend). Default "api" preserves prior non-interactive behaviour.
+    llm_mode: str = field(default="api")
 
     def set_repo(self, repo_path: str) -> None:
         """

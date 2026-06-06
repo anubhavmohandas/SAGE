@@ -390,6 +390,10 @@ def _generate_and_run_security_tests(
 
 def _generate_security_test(vuln: dict, patched_code: str) -> Optional[str]:
     """Ask Claude to write a security test for a confirmed vulnerability."""
+    # Respect pipeline-wide mode: in manual mode, never call the API.
+    if getattr(cfg, "llm_mode", "api") == "manual":
+        cprint(f"[tests] Manual mode — skipping API test generation for {vuln['cve_id']}")
+        return None
     if not cfg.ANTHROPIC_API_KEY:
         cprint(f"[tests] No Anthropic key — skipping test generation for {vuln['cve_id']}")
         return None

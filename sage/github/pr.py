@@ -79,17 +79,46 @@ def run_github_pr(
         cprint("[github] Nothing to patch — no PR needed")
         return {"skipped": True, "reason": "No patches generated"}
 
-    # Determine if PR should be draft (tests failed)
+    # Determine if PR should be draft.
     tests_passed = test_results.get("all_passed", False)
     verify_passed = verify_results.get("passed", False)
-    is_draft = not tests_passed  # draft if tests failed
+
+    # GATE: detect confirmed CVEs that were SUPPOSED to get a code patch but
+    # produced none (e.g. LLM credits exhausted, quota blown, empty {} response).
+    # Without this, SAGE would open a confident non-draft "all passed" PR that
+    # actually contains no real fixes — worse than failing visibly.
+    confirmed_ids = {c.get("cve_id") for c in confirmed if c.get("cve_id")}
+    patched_ids = set()
+    for p in code_patches:
+        manifest = Path(p.get("patch_dir", "")) / "manifest.json"
+        try:
+            if manifest.exists():
+                import json as _j
+                entries = _j.loads(manifest.read_text())
+                if entries:  # non-empty manifest = real patched file(s)
+                    patched_ids.add(p.get("cve_id"))
+        except Exception:
+            pass
+    missing_patches = sorted(confirmed_ids - patched_ids)
+
+    is_draft = (not tests_passed) or bool(missing_patches)
+    draft_reason = []
+    if not tests_passed:
+        draft_reason.append("tests failed")
+    if missing_patches:
+        draft_reason.append(
+            f"{len(missing_patches)} confirmed CVE(s) have NO code patch "
+            f"(generation likely failed): {', '.join(missing_patches)}"
+        )
+        cprint(f"[github] ⚠️  Forcing DRAFT — {draft_reason[-1]}")
 
     # Branch name — include time to avoid conflicts on same-day re-runs
     date_str = datetime.now().strftime("%Y-%m-%d-%H%M")
     branch   = f"sage/security-patch-{date_str}"
 
     cprint(f"[github] Creating branch: {branch}")
-    cprint(f"[github] Draft PR: {is_draft} (tests {'passed' if tests_passed else 'failed'})")
+    cprint(f"[github] Draft PR: {is_draft}"
+           + (f" — {'; '.join(draft_reason)}" if draft_reason else " (tests passed, all patches present)"))
 
     if dry_run:
         cprint(f"[github] DRY RUN — skipping git operations")
@@ -159,7 +188,12 @@ def run_github_pr(
 
     if pr_url:
         cprint(f"[github] PR created → {pr_url}")
-        return {"pr_url": pr_url, "branch": branch, "draft": is_draft, "skipped": False}
+        return {
+            "pr_url": pr_url, "branch": branch, "draft": is_draft,
+            "skipped": False,
+            "draft_reason": "; ".join(draft_reason) if draft_reason else "",
+            "missing_patches": missing_patches,
+        }
     else:
         return {"skipped": True, "reason": "PR creation failed"}
 
@@ -313,7 +347,9 @@ def _apply_patches(patch_result: dict, repo_path: str) -> list[str]:
                          f"path={original_path!r}")
             continue
         dst.write_text(content)
-        cves_str = ", ".join(file_cves[original_path])
+        # Dedup + sort CVE ids — a file can have several manifest entries per CVE,
+        # which previously produced "(CVE-X, CVE-X, CVE-X, ...)" in the log/commit.
+        cves_str = ", ".join(sorted(set(file_cves[original_path])))
         cprint(f"[github] Applied code patch → {original_path} ({cves_str})")
         changed.append(original_path)
 

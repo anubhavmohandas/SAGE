@@ -116,6 +116,11 @@ def analyze_findings(
                    passed as context into prompts for more accurate exploitability decisions.
     """
     mode = _ask_mode()
+    # Persist the choice pipeline-wide so the patcher and test generator respect
+    # it. Without this, manual mode only applied to the analyzer and the later
+    # stages would still hit the API (burning credits you chose not to spend).
+    cfg.llm_mode = mode
+    cprint(f"[analyzer] LLM mode for this run: {mode} (applies to analyzer, patcher, tests)")
     if mode == "api":
         return _analyze_api(findings, G, repo_path, reach_results)
     return _analyze_manual(findings, G, repo_path, reach_results)
