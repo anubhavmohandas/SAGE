@@ -105,15 +105,7 @@ GITHUB_REPO=       # owner/repo
 
 ## Usage
 
-> ### ⚠️ Security: SAGE executes code from the repo it scans
->
-> To verify patches, SAGE **installs the scanned repo's dependencies** (`pip`, which runs each package's build hooks) and **runs its test suite plus LLM-generated tests** — all as subprocesses on the machine running SAGE. A malicious or compromised target repo can therefore run code on your host.
->
-> Mitigations already in place: those subprocesses are launched with SAGE's API keys/tokens **scrubbed from their environment** (`sage/tests/runner.py`), so scanned code cannot read your secrets.
->
-> **This is a backstop, not a sandbox.** Operating rule:
-> - **Your own / trusted repos** → fine to scan on your normal OS.
-> - **Any untrusted or third-party repo** → run SAGE inside a **disposable VM or container** (not just "a Linux box" — it must be throwaway and network-restricted). Full containerised isolation is on the roadmap (Sage Cloud).
+> ⚠️ **SAGE executes code from the repo it scans** (dependency install + tests). Safe for your own repos; run untrusted repos in a disposable VM/container. See [Security](#️-security-sage-executes-scanned-repo-code) for details.
 
 The easiest way to run SAGE is the interactive launcher — it auto-detects your GitHub remote, asks which repo to scan, and lets you pick the CVE window:
 
@@ -152,7 +144,9 @@ SAGE works with or without API keys.
 
 **API mode** — Gemini 2.0 Flash (free tier, 15 RPM) as primary analyzer with exponential backoff. Falls back to Anthropic if Gemini quota exhausted.
 
-**Manual mode** — No API key needed. SAGE exports `data/prompts/CVE-XXXX.txt` for each CVE. Paste into any LLM, save the JSON response to `data/responses/CVE-XXXX.json`, re-run. Pipeline picks up where it left off.
+**Manual mode** — No API key needed, and the choice applies to the **entire pipeline** (analyzer, patcher, and security-test generation). SAGE exports a prompt file for each step — analysis (`data/<repo>/prompts/`), patches (`data/<repo>/patches/patch_prompt_*.txt`), and tests (`data/<repo>/tests/test_prompt_*.txt`). Paste each into any LLM, save the response next to it, and the pipeline continues. Manual mode never calls an API, so it never consumes credits or hits quota limits.
+
+> Note: responses are reused across runs only if they contain real content; stale or empty leftovers from a previous run are ignored and re-requested.
 
 Manual response schema:
 ```json
@@ -184,8 +178,27 @@ Manual response schema:
 | Scenario | Action |
 |---|---|
 | CVE with known safe version, no confirmed exploitable code | Dep bump only — bumps `requirements.txt` with `>=safe_version` |
-| CVE confirmed exploitable by LLM | Code patch via Claude Sonnet + dep bump. Patch written to `data/patches/CVE-XXXX/` |
+| CVE confirmed exploitable by LLM | Code patch (Claude Sonnet in API mode, or manual prompt in manual mode) + dep bump. Patch written to `data/<repo>/patches/CVE-XXXX/` |
 | `pkg[extras]` in requirements (e.g. `aiohttp[speedups]`) | Extras preserved — regex extracts base name + extras separately |
+
+---
+
+## Tests, verification & PR gating
+
+After patching, SAGE runs the repo's existing tests and generates a **security test** per confirmed CVE. To stay reliable across Python versions and avoid hallucinated library APIs, generated security tests assert the **patched dependency version is installed** rather than reconstructing exploits. (This proves the upstream fix is present — the appropriate check for dependency CVEs. It does not reproduce the exploit.)
+
+The PR is opened as a **draft** unless *both* are true: existing + security tests pass, **and** every confirmed CVE actually produced a patch. If patch generation failed or tests fail, SAGE forces a draft and states why — it never presents an empty or unverified patch as a ready-to-merge PR.
+
+---
+
+## ⚠️ Security: SAGE executes scanned-repo code
+
+To verify patches, SAGE installs the scanned repo's dependencies (`pip`, which runs build hooks) and runs its tests on the host. A malicious or compromised target repo can therefore run code on your machine. SAGE launches these subprocesses with its own API keys/tokens **scrubbed from the environment**, so scanned code cannot read your secrets — but this is a backstop, not a sandbox.
+
+- **Your own / trusted repos** → fine on your normal machine.
+- **Untrusted / third-party repos** → run SAGE inside a disposable VM or container. (Full sandboxing is on the roadmap.)
+
+Use a **fine-grained** GitHub token scoped to the target repo (Contents + Pull requests), never a classic full-`repo` PAT.
 
 ---
 
