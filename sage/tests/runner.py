@@ -103,18 +103,28 @@ PATCHED CODE:
 ```
 
 TASK:
-Write a pytest test file that:
-1. Tests that the vulnerability is no longer exploitable (the malicious input is rejected/sanitized)
-2. Tests that normal inputs still work correctly
+Write a pytest test file that verifies this dependency vulnerability is fixed.
+
+IMPORTANT — reliability over cleverness:
+The single most reliable proof that a dependency CVE is fixed is asserting the
+installed package version is at or above the patched version. Prefer this. Do NOT
+write tests that call live network requests, construct exploits, or exercise
+library internals — those are flaky and frequently use APIs incorrectly.
 
 Rules:
-- Use pytest
-- Keep it simple — 2-3 test functions max
-- Import only stdlib + the affected package
-- If patched code is not available (dep bump only), test that the package version is now safe
-- Add a docstring explaining what each test verifies
-- For async cleanup (e.g. closing aiohttp sessions), use `asyncio.run(session.close())` — NEVER use `asyncio.get_event_loop().run_until_complete(...)` as it is deprecated and raises RuntimeError on Python 3.10+
-- Target Python 3.10+ compatibility
+- Use pytest. Keep it to 1-2 test functions.
+- Import only `pytest`, `{package}`, and `packaging.version.Version`. Nothing else.
+- The PRIMARY test MUST assert the installed version is >= the patched version,
+  parsing the safe version from the "Recommended fix"/reason text above. Example:
+      from packaging.version import Version
+      import {package}
+      def test_version_patched():
+          assert Version({package}.__version__) >= Version("<patched_version>")
+- Do NOT call any async code. Do NOT create ClientSession/connectors/sockets.
+- Do NOT pass made-up keyword arguments to library constructors (e.g. aiohttp
+  ClientSession does NOT accept allow_redirects — that belongs on requests only).
+- If you cannot determine a method/argument exists for certain, do not use it.
+- Add a one-line docstring per test.
 
 OUTPUT: Respond with ONLY valid Python code. No markdown fences. No explanation outside the code."""
 
