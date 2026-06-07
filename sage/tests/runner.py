@@ -113,6 +113,8 @@ Rules:
 - Import only stdlib + the affected package
 - If patched code is not available (dep bump only), test that the package version is now safe
 - Add a docstring explaining what each test verifies
+- For async cleanup (e.g. closing aiohttp sessions), use `asyncio.run(session.close())` — NEVER use `asyncio.get_event_loop().run_until_complete(...)` as it is deprecated and raises RuntimeError on Python 3.10+
+- Target Python 3.10+ compatibility
 
 OUTPUT: Respond with ONLY valid Python code. No markdown fences. No explanation outside the code."""
 
