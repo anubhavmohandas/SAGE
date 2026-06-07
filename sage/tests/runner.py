@@ -85,6 +85,38 @@ def _untrusted_exec_warning(repo_path: str) -> None:
     )
 
 
+# Security-test generation prompt. Shared by API mode (sent to the LLM) and
+# manual mode (exported to a file for you to paste into Claude).
+_TEST_PROMPT_TEMPLATE = """You are a security engineer writing a pytest test to verify a vulnerability fix.
+
+VULNERABILITY:
+- CVE: {cve_id}
+- Package: {package}
+- CWE: {cwe}
+- Why it was exploitable: {reason}
+- Attack vector: {attack}
+- Affected functions: {functions}
+
+PATCHED CODE:
+```python
+{patched}
+```
+
+TASK:
+Write a pytest test file that:
+1. Tests that the vulnerability is no longer exploitable (the malicious input is rejected/sanitized)
+2. Tests that normal inputs still work correctly
+
+Rules:
+- Use pytest
+- Keep it simple — 2-3 test functions max
+- Import only stdlib + the affected package
+- If patched code is not available (dep bump only), test that the package version is now safe
+- Add a docstring explaining what each test verifies
+
+OUTPUT: Respond with ONLY valid Python code. No markdown fences. No explanation outside the code."""
+
+
 def _tests_dir() -> Path:
     try:
         from sage.config import cfg
@@ -350,8 +382,10 @@ def _generate_and_run_security_tests(
         cve_id   = vuln["cve_id"]
         test_file = _tests_dir() / f"test_{cve_id.replace('-', '_')}.py"
 
-        # Get the patched code for context
-        patch_dir = Path("data/patches") / cve_id
+        # Get the patched code for context. Use the REPO-SCOPED patches dir
+        # (data/<repo>/patches/<cve>), not the legacy data/patches — otherwise the
+        # patched code is never found and tests are generated without context.
+        patch_dir = cfg.data_dir("patches", cve_id)
         patched_code = ""
         if patch_dir.exists():
             for f in patch_dir.glob("patched_*.py"):
@@ -388,51 +422,88 @@ def _generate_and_run_security_tests(
         return {"passed": False, "output": str(e), "files": generated_files}
 
 
-def _generate_security_test(vuln: dict, patched_code: str) -> Optional[str]:
-    """Ask Claude to write a security test for a confirmed vulnerability."""
-    # Respect pipeline-wide mode: in manual mode, never call the API.
-    if getattr(cfg, "llm_mode", "api") == "manual":
-        cprint(f"[tests] Manual mode — skipping API test generation for {vuln['cve_id']}")
-        return None
-    if not cfg.ANTHROPIC_API_KEY:
-        cprint(f"[tests] No Anthropic key — skipping test generation for {vuln['cve_id']}")
-        return None
-
+def _build_test_prompt(vuln: dict, patched_code: str) -> str:
+    """Build the security-test generation prompt (shared by API and manual modes)."""
     cve_id    = vuln["cve_id"]
     package   = vuln.get("package", "")
     cwe       = vuln.get("cwe", "")
     reason    = vuln.get("reason", "")
     attack    = vuln.get("attack_vector", "")
     functions = vuln.get("affected_functions", [])
+    return _TEST_PROMPT_TEMPLATE.format(
+        cve_id=cve_id, package=package, cwe=cwe, reason=reason, attack=attack,
+        functions=', '.join(functions) if functions else 'unknown',
+        patched=patched_code[:2000] if patched_code else "Not available — dep bump only",
+    )
 
-    prompt = f"""You are a security engineer writing a pytest test to verify a vulnerability fix.
 
-VULNERABILITY:
-- CVE: {cve_id}
-- Package: {package}
-- CWE: {cwe}
-- Why it was exploitable: {reason}
-- Attack vector: {attack}
-- Affected functions: {', '.join(functions) if functions else 'unknown'}
+def _manual_test(vuln: dict, patched_code: str) -> Optional[str]:
+    """
+    Manual-mode test generation: export a prompt and reuse a saved test file.
 
-PATCHED CODE:
-```python
-{patched_code[:2000] if patched_code else "Not available — dep bump only"}
-```
+    Mirrors the patcher's manual flow. We need security tests in manual mode too
+    (verification doesn't depend on the LLM, but test *generation* does) — so SAGE
+    exports a prompt for you to paste into Claude, and reads back the test you save.
+    Reuse is gated on CONTENT (a real .py test), not timestamp.
+    """
+    import sys
+    cve_id     = vuln["cve_id"]
+    td         = _tests_dir()
+    prompt_file = td / f"test_prompt_{cve_id.replace('-', '_')}.txt"
+    test_file   = td / f"test_{cve_id.replace('-', '_')}.py"
 
-TASK:
-Write a pytest test file that:
-1. Tests that the vulnerability is no longer exploitable (the malicious input is rejected/sanitized)
-2. Tests that normal inputs still work correctly
+    # Reuse an existing test if it has real content (not empty/placeholder).
+    if test_file.exists():
+        existing = test_file.read_text(errors="ignore").strip()
+        if existing and ("def test" in existing or "import" in existing):
+            cprint(f"[tests] {cve_id} → reusing saved security test")
+            return existing
 
-Rules:
-- Use pytest
-- Keep it simple — 2-3 test functions max
-- Import only stdlib + the affected package
-- If patched code is not available (dep bump only), test that the package version is now safe
-- Add a docstring explaining what each test verifies
+    prompt = _build_test_prompt(vuln, patched_code)
+    prompt_file.write_text(prompt)
 
-OUTPUT: Respond with ONLY valid Python code. No markdown fences. No explanation outside the code."""
+    if not sys.stdin.isatty():
+        cprint(f"[tests] {cve_id} — test prompt exported (manual mode), skipping")
+        return None
+
+    cprint(f"\n[tests] ── Manual security test needed: {cve_id} ──")
+    cprint(f"  Prompt saved → {prompt_file.resolve()}")
+    cprint(f"  1. Paste into Claude / ChatGPT")
+    cprint(f"  2. Save the Python test to:")
+    cprint(f"     {test_file.resolve()}")
+    cprint(f"  Press Enter when saved  |  S to skip this CVE")
+
+    import select
+    while True:
+        ready, _, _ = select.select([sys.stdin], [], [], 3.0)
+        if ready:
+            choice = sys.stdin.readline().strip().lower()
+            if choice == "s":
+                cprint(f"[tests] Skipping test for {cve_id}")
+                return None
+            break
+        if test_file.exists() and test_file.read_text(errors="ignore").strip():
+            break
+        cprint(f"  Waiting for {test_file.name}...", end="\r", flush=True)
+
+    if test_file.exists():
+        code = test_file.read_text(errors="ignore").strip()
+        if code:
+            cprint(f"[tests] {cve_id} → manual security test loaded")
+            return code
+    return None
+
+
+def _generate_security_test(vuln: dict, patched_code: str) -> Optional[str]:
+    """Ask Claude to write a security test for a confirmed vulnerability."""
+    # Manual mode: export prompt + reuse saved test (no API call).
+    if getattr(cfg, "llm_mode", "api") == "manual":
+        return _manual_test(vuln, patched_code)
+    if not cfg.ANTHROPIC_API_KEY:
+        cprint(f"[tests] No Anthropic key — skipping test generation for {vuln['cve_id']}")
+        return None
+
+    prompt = _build_test_prompt(vuln, patched_code)
 
     try:
         import anthropic
@@ -452,7 +523,7 @@ OUTPUT: Respond with ONLY valid Python code. No markdown fences. No explanation 
                 code = code[6:]
         return code.strip()
     except Exception as e:
-        cprint(f"[tests] Claude error generating test for {cve_id}: {e}")
+        cprint(f"[tests] Claude error generating test for {vuln['cve_id']}: {e}")
         return None
 
 

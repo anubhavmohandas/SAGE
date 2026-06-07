@@ -93,6 +93,15 @@ def run_verifier(patch_result: dict, confirmed: list[dict], repo_path: str) -> d
             result = _verify_code_patch(cve_id, cwe, patch_dir)
             results["code_results"].append(result)
 
+            # Persist a per-CVE verification artifact into verify/ (runs in BOTH
+            # API and manual mode — verification never needs the LLM). Previously
+            # verify/ was created but never written to, so it was always empty.
+            try:
+                out = _verify_dir() / f"{cve_id}.json"
+                out.write_text(json.dumps(result, indent=2))
+            except Exception as e:
+                cprint(f"[verifier] Could not write verify/{cve_id}.json: {e}")
+
             if not result["passed"]:
                 results["passed"] = False
                 results["new_issues"].extend(result.get("findings", []))
