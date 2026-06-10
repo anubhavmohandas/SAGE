@@ -22,7 +22,9 @@ python3 main.py --repo /path/to/your/repo
 
 Most security tools answer: *"Library X has CVE-Y."*
 
-SAGE answers: *"Function `fetch_json()` in `cybertrace/modules/base.py` calls `aiohttp`, which has 18 CVEs — here's the exact call chain, here's the blast radius, here's the patch."*
+SAGE answers: *"Function `fetch_json()` in `cybertrace/modules/base.py` calls `aiohttp`, which has 18 CVEs — here's the blast radius, here's the patch."*
+
+Reachability analysis traces call paths from entry points to the vulnerable library (same-file call-chain resolution today; cross-file resolution is on the roadmap), and feeds those paths to the analyzer as exploitability context.
 
 The graph is the codebase. CVEs are badges on nodes that already exist.
 
@@ -288,7 +290,9 @@ Stack detected:   aiohttp, click, rich, dnspython, phonenumbers, python-dotenv, 
 CVEs found:       33 total from NVD, 24 attached to graph
                   CRITICAL×3  HIGH×9  MEDIUM×12
 Semgrep:          0 findings (correct — client-only CLI, no server-side exposure)
-Confirmed:        0/24 exploitable (correct — no user-controlled input to vuln paths)
+Confirmed:        0/24 exploitable (note: this run predates the reachability
+                  engine fix — analysis was based on Semgrep + code context only;
+                  re-validation with live reachability paths pending)
 Dep bump:         aiohttp >=3.9.0 → >=3.13.3 (18 CVEs)
                   click >=8.0.0 → >=8.3.3 (1 CVE)
 Tests:            49 passed, 1 pre-existing failure (baseline detected, PR not blocked)

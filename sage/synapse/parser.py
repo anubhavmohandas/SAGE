@@ -90,6 +90,8 @@ def parse_repo(repo_path: str) -> nx.DiGraph:
         CONTAINS — file → function
         IMPORTS  — file → library
         USES     — function → library (call site)
+        CALLS    — function → function (same-file calls, Python only for now —
+                   this is what reachability.py walks to build call chains)
 
     Args:
         repo_path: Path to the repo root
@@ -229,6 +231,23 @@ def _py_extract_functions(G: nx.DiGraph, root, source: bytes,
                            file_id: str, rel_path: str, import_aliases: dict):
     """Find Python function/method definitions and add to graph."""
 
+    # Pass 1 — collect every function name defined in this file BEFORE extracting
+    # calls, so forward references resolve (foo() calling bar() defined later).
+    # Known approximation: methods with the same name on different classes in the
+    # same file collapse to one node (last definition wins for call resolution).
+    local_funcs: dict[str, str] = {}
+
+    def collect(node):
+        if node.type == "function_definition":
+            name = _get_field_text(node, source, "name")
+            if name:
+                local_funcs[name] = f"func:{rel_path}:{name}"
+        for child in node.children:
+            collect(child)
+
+    collect(root)
+
+    # Pass 2 — register functions and extract their call sites
     def walk(node):
         if node.type in ("function_definition", "decorated_definition"):
             func_node = node
@@ -245,7 +264,8 @@ def _py_extract_functions(G: nx.DiGraph, root, source: bytes,
                            type="function", file=rel_path, name=func_name,
                            line=func_node.start_point[0] + 1, lang="python")
                 G.add_edge(file_id, func_id, label="CONTAINS")
-                _py_extract_calls(G, func_node, source, func_id, import_aliases)
+                _py_extract_calls(G, func_node, source, func_id,
+                                  import_aliases, local_funcs)
 
                 for child in func_node.children:
                     walk(child)
@@ -258,8 +278,18 @@ def _py_extract_functions(G: nx.DiGraph, root, source: bytes,
 
 
 def _py_extract_calls(G: nx.DiGraph, func_node, source: bytes,
-                       func_id: str, import_aliases: dict):
-    """Find library call sites inside a Python function body."""
+                       func_id: str, import_aliases: dict,
+                       local_funcs: Optional[dict] = None):
+    """
+    Find call sites inside a Python function body.
+
+    Emits two edge types:
+      USES   func → lib   (call into an imported library)
+      CALLS  func → func  (call to another function defined in the SAME file —
+                           same-file resolution only; cross-file calls are a
+                           planned extension and require import resolution)
+    """
+    local_funcs = local_funcs or {}
 
     def walk(node):
         if node.type == "call":
@@ -273,6 +303,16 @@ def _py_extract_calls(G: nx.DiGraph, func_node, source: bytes,
                             lib_id = f"lib:{obj_name}"
                             if G.has_node(lib_id) and not G.has_edge(func_id, lib_id):
                                 G.add_edge(func_id, lib_id, label="USES")
+                        elif obj_name in ("self", "cls"):
+                            # self.method() / cls.method() → CALLS edge if the
+                            # method is defined in this file
+                            attr = func_part.child_by_field_name("attribute")
+                            if attr:
+                                attr_name = source[attr.start_byte:attr.end_byte].decode("utf-8", errors="ignore")
+                                callee_id = local_funcs.get(attr_name)
+                                if callee_id and callee_id != func_id:
+                                    if not G.has_edge(func_id, callee_id):
+                                        G.add_edge(func_id, callee_id, label="CALLS")
 
                 elif func_part.type == "identifier":
                     name = source[func_part.start_byte:func_part.end_byte].decode("utf-8", errors="ignore")
@@ -280,6 +320,11 @@ def _py_extract_calls(G: nx.DiGraph, func_node, source: bytes,
                         lib_id = import_aliases[name]
                         if G.has_node(lib_id) and not G.has_edge(func_id, lib_id):
                             G.add_edge(func_id, lib_id, label="USES")
+                    elif name in local_funcs:
+                        # bare call to a function defined in this file
+                        callee_id = local_funcs[name]
+                        if callee_id != func_id and not G.has_edge(func_id, callee_id):
+                            G.add_edge(func_id, callee_id, label="CALLS")
 
         for child in node.children:
             walk(child)

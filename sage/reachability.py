@@ -19,17 +19,22 @@ to:
 The result is fed to the analyzer as additional context, letting the LLM
 confirm whether the path is actually exploitable — not just present.
 
-Graph edge types used:
-  CALLS     function_A → function_B  (A calls B)
+Graph edge types used (as emitted by synapse/parser.py):
+  CALLS     function_A → function_B  (A calls B — same-file resolution)
   USES      function_A → library_B   (A uses library_B)
   CONTAINS  file_A → function_B      (file contains function)
-  DEPENDS   library_A → cve_B        (library affected by CVE)
+  AFFECTS   library_A → cve_B        (library affected by CVE)
 
-Walk direction (reversed):
-  cve → library (via DEPENDS, reversed)
-  library → function (via USES, reversed)
-  function → function (via CALLS, reversed — find callers)
-  function → entry (stop when entry point detected)
+Walk direction — backwards via G.predecessors():
+  cve → library      (predecessors of cve via AFFECTS)
+  library → function (predecessors of lib via USES)
+  function → caller  (predecessors of func via CALLS)
+  caller → entry     (stop when entry point detected)
+
+NOTE: do NOT use G.reverse() + predecessors() here. predecessors() on the
+reversed graph equals successors() on the original — the two reversals cancel
+and the walk silently goes FORWARD into CVE sink nodes (the bug that made
+this engine return zero paths for its first several months).
 """
 
 from __future__ import annotations
@@ -86,16 +91,13 @@ def analyze_reachability(G: nx.DiGraph) -> list[dict]:
     if not cve_nodes:
         return results
 
-    # Build a reverse graph once — cheaper than reversing per-CVE
-    G_rev = G.reverse(copy=False)
-
     for cve_node in cve_nodes:
         data    = G.nodes[cve_node]
         cve_id  = data.get("cve_id", cve_node.replace("cve:", ""))
         package = data.get("package", "")
         severity = data.get("severity", "UNKNOWN")
 
-        paths = _find_paths_to_cve(G, G_rev, cve_node, package)
+        paths = _find_paths_to_cve(G, cve_node, package)
 
         results.append({
             "cve_id":      cve_id,
@@ -114,7 +116,6 @@ def analyze_reachability(G: nx.DiGraph) -> list[dict]:
 
 def _find_paths_to_cve(
     G: nx.DiGraph,
-    G_rev: nx.DiGraph,
     cve_node: str,
     package: str,
 ) -> list[dict]:
@@ -129,23 +130,25 @@ def _find_paths_to_cve(
         return paths
 
     # Step 2 — Find functions/files that directly use any of these libraries.
-    # The graph has two patterns:
-    #   a) fn: --USES--> lib:       (function directly uses library)
-    #   b) file: --IMPORTS--> lib:  (file imports library → all functions in file are exposed)
+    # The graph has two patterns (parser emits func: prefixed function nodes):
+    #   a) func: --USES--> lib:      (function directly uses library)
+    #   b) file: --IMPORTS--> lib:   (file imports library → all functions in file are exposed)
+    # Predecessors of lib in G are exactly the nodes with edges INTO lib.
     direct_users: set[str] = set()
     for lib_node in lib_nodes:
-        for predecessor in G_rev.predecessors(lib_node):
-            if predecessor.startswith("fn:") or predecessor.startswith("function:"):
+        for predecessor in G.predecessors(lib_node):
+            if predecessor.startswith("func:"):
                 # Pattern a: function directly uses lib
                 direct_users.add(predecessor)
             elif predecessor.startswith("file:"):
-                # Pattern b: file imports lib → find all functions in that file
-                for fn_node in G_rev.predecessors(predecessor):
-                    if fn_node.startswith("fn:") or fn_node.startswith("function:"):
-                        direct_users.add(fn_node)
-                # Also treat the file itself as a reachability point if no functions found
-                if not any(p.startswith("fn:") or p.startswith("function:")
-                           for p in G_rev.predecessors(predecessor)):
+                # Pattern b: file imports lib → all functions CONTAINed in that file
+                # (functions of a file are its successors via CONTAINS edges)
+                file_funcs = [s for s in G.successors(predecessor)
+                              if s.startswith("func:")]
+                if file_funcs:
+                    direct_users.update(file_funcs)
+                else:
+                    # No functions parsed — treat the file itself as the exposure point
                     direct_users.add(predecessor)
 
     if not direct_users:
@@ -153,7 +156,7 @@ def _find_paths_to_cve(
 
     # Step 3 — For each direct user, walk backwards up call chains to entry points
     for fn_node in direct_users:
-        fn_paths = _trace_to_entries(G_rev, fn_node, sink_lib=lib_nodes, depth=0)
+        fn_paths = _trace_to_entries(G, fn_node, sink_lib=lib_nodes, depth=0)
         paths.extend(fn_paths)
 
     # Deduplicate by path tuple
@@ -171,11 +174,11 @@ def _find_paths_to_cve(
 
 
 def _get_library_nodes(G: nx.DiGraph, cve_node: str, package: str) -> list[str]:
-    """Find library nodes connected to this CVE (via DEPENDS edges, reversed)."""
+    """Find library nodes connected to this CVE (lib --AFFECTS--> cve, so libs
+    are the CVE node's predecessors in G)."""
     lib_nodes: list[str] = []
-    G_rev = G.reverse(copy=False)
 
-    for pred in G_rev.predecessors(cve_node):
+    for pred in G.predecessors(cve_node):
         if pred.startswith("lib:"):
             lib_nodes.append(pred)
 
@@ -189,7 +192,7 @@ def _get_library_nodes(G: nx.DiGraph, cve_node: str, package: str) -> list[str]:
 
 
 def _trace_to_entries(
-    G_rev: nx.DiGraph,
+    G: nx.DiGraph,
     fn_node: str,
     sink_lib: list[str],
     depth: int,
@@ -198,6 +201,9 @@ def _trace_to_entries(
 ) -> list[dict]:
     """
     Recursively walk backwards from fn_node through CALLS edges.
+    Callers of a function are its predecessors in G via CALLS edges
+    (we filter to func: so the CONTAINS file→func edge doesn't count
+    the containing file as a "caller").
     Returns list of path dicts when an entry point is found.
     """
     if path is None:
@@ -215,7 +221,7 @@ def _trace_to_entries(
     current_path = path + [fn_name]
 
     # Is this node an entry point?
-    entry_type = _classify_entry(fn_node, G_rev)
+    entry_type = _classify_entry(fn_node, G)
     if entry_type:
         # Build the full forward path (entry → ... → lib)
         full_path = list(reversed(current_path)) + [_node_display(sink_lib[0])]
@@ -226,10 +232,10 @@ def _trace_to_entries(
             "entry_type": entry_type,
         }]
 
-    # Walk to callers
+    # Walk to callers (func→func CALLS predecessors only)
     results: list[dict] = []
-    callers = [n for n in G_rev.predecessors(fn_node)
-               if n.startswith("fn:") or n.startswith("function:") or n.startswith("file:")]
+    callers = [n for n in G.predecessors(fn_node)
+               if n.startswith("func:")]
 
     if not callers:
         # No callers — this function is itself a root. Treat as potential entry.
@@ -242,7 +248,7 @@ def _trace_to_entries(
         }]
 
     for caller in callers:
-        sub = _trace_to_entries(G_rev, caller, sink_lib, depth + 1, current_path, visited)
+        sub = _trace_to_entries(G, caller, sink_lib, depth + 1, current_path, visited)
         results.extend(sub)
 
     return results
@@ -252,13 +258,16 @@ def _trace_to_entries(
 
 def _node_display(node: str) -> str:
     """Strip the node type prefix for readable path display."""
+    # func:path/to/file.py:func_name → func_name (path is noise in a chain)
+    if node.startswith("func:"):
+        return node.rsplit(":", 1)[-1]
     for prefix in ("fn:", "function:", "lib:", "file:", "cve:", "repo:"):
         if node.startswith(prefix):
             return node[len(prefix):]
     return node
 
 
-def _classify_entry(fn_node: str, G_rev: nx.DiGraph) -> Optional[str]:
+def _classify_entry(fn_node: str, G: nx.DiGraph) -> Optional[str]:
     """
     Classify a function node as an entry point type, or None if not an entry.
 
@@ -290,8 +299,8 @@ def _classify_entry(fn_node: str, G_rev: nx.DiGraph) -> Optional[str]:
     # Public API — no leading underscore, not a helper
     if not name.startswith("_") and not name.startswith("__"):
         # Only flag as entry if it has no callers within the graph
-        callers = [n for n in G_rev.predecessors(fn_node)
-                   if n.startswith("fn:") or n.startswith("function:")]
+        callers = [n for n in G.predecessors(fn_node)
+                   if n.startswith("func:")]
         if not callers:
             return "public_api"
 
