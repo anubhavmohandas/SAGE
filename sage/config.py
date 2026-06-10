@@ -59,46 +59,25 @@ class Config:
         """
         Set the active repo context.
         All subsequent cfg.data_dir() calls return data/<repo_name>/.
-        Also asks whether to override GITHUB_REPO if the env value doesn't
-        match the repo being scanned.
+
+        Source-of-truth rule: the scanned repo's OWN git remote is authoritative
+        for the PR target. GITHUB_REPO from .env is only a fallback for repos with
+        no remote. This guarantees SAGE can never open a PR against a repo other
+        than the one it actually scanned — and removes the previous double-prompt
+        (this method asked, and sage_scan.sh asked) which could disagree.
         """
-        import sys
         self._repo_name = Path(repo_path).name or "default"
 
-        # Auto-detect the correct GitHub repo for this path
         detected = _detect_github_repo_from_path(repo_path)
-        if detected and detected != self.GITHUB_REPO:
-            if sys.stdin.isatty():
-                # Check if user already made a choice for this repo (stored in data/<repo>/.github_repo)
-                cache_file = Path("data") / self._repo_name / ".github_repo"
-                cache_file.parent.mkdir(parents=True, exist_ok=True)
-                if cache_file.exists():
-                    cached = cache_file.read_text().strip()
-                    self.GITHUB_REPO = cached
-                    # Silent — user already decided
-                else:
-                    cprint(f"\n[SAGE] ── GitHub Repo Mismatch ──")
-                    cprint(f"  GITHUB_REPO in .env:  {self.GITHUB_REPO}")
-                    cprint(f"  Detected from remote: {detected}")
-                    cprint(f"  [1] Use detected ({detected})  [2] Keep .env value  [3] Enter manually")
-                    choice = input("  Choice (1/2/3): ").strip()
-                    if choice == "1":
-                        self.GITHUB_REPO = detected
-                        cprint(f"  Using {detected}")
-                    elif choice == "3":
-                        val = input("  Enter owner/repo: ").strip()
-                        if val:
-                            self.GITHUB_REPO = val
-                            cprint(f"  Using {val}")
-                    else:
-                        cprint(f"  Keeping {self.GITHUB_REPO}")
-                    # Remember this choice — 0o600: owner read/write only (contains repo name)
-                    cache_file.write_text(self.GITHUB_REPO)
-                    cache_file.chmod(0o600)
-                    cprint(f"  (Choice saved — won't ask again for {self._repo_name})")
-            else:
-                cprint(f"[SAGE] Auto-selecting GitHub repo: {detected} (detected from git remote)")
-                self.GITHUB_REPO = detected
+        if detected:
+            if detected != self.GITHUB_REPO:
+                cprint(f"[SAGE] PR target = {detected} (from scanned repo's git remote; "
+                       f".env GITHUB_REPO={self.GITHUB_REPO or 'unset'} ignored)")
+            self.GITHUB_REPO = detected
+        elif self.GITHUB_REPO:
+            cprint(f"[SAGE] No git remote on scanned repo — falling back to "
+                   f".env GITHUB_REPO={self.GITHUB_REPO}")
+        # else: no remote and no .env → pr.py will skip PR creation (no target)
 
     def data_dir(self, *subdirs: str) -> Path:
         """

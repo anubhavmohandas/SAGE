@@ -57,12 +57,22 @@ echo -e "${BOLD}Repo:${RESET} $REPO_PATH ${DIM}($REPO_NAME)${RESET}"
 
 # ── Step 2: Detect GitHub remote ─────────────────────────────────────────────
 DETECTED_GITHUB=""
-if [ -d "$REPO_PATH/.git" ]; then
+# Use -e (not -d): .git is a file for worktrees/submodules. Also fall back to the
+# first remote if there's no "origin".
+if [ -e "$REPO_PATH/.git" ]; then
     RAW_REMOTE=$(git -C "$REPO_PATH" remote get-url origin 2>/dev/null || echo "")
+    if [ -z "$RAW_REMOTE" ]; then
+        FIRST_REMOTE=$(git -C "$REPO_PATH" remote 2>/dev/null | head -1)
+        [ -n "$FIRST_REMOTE" ] && RAW_REMOTE=$(git -C "$REPO_PATH" remote get-url "$FIRST_REMOTE" 2>/dev/null || echo "")
+    fi
     if [ -n "$RAW_REMOTE" ]; then
-        # Extract owner/repo from HTTPS or SSH
-        DETECTED_GITHUB=$(echo "$RAW_REMOTE" | \
-            sed -E 's|.*github\.com[/:]([^/]+/[^/]+?)(\.git)?$|\1|' 2>/dev/null || echo "")
+        # Extract owner/repo from HTTPS or SSH. Strip protocol/host, then a
+        # trailing .git, WITHOUT lazy regex (macOS BSD sed doesn't support +?,
+        # which silently broke the previous one-liner and returned nothing).
+        DETECTED_GITHUB=$(echo "$RAW_REMOTE" \
+            | sed -E 's|^.*github\.com[/:]||' \
+            | sed -E 's|\.git$||' \
+            | sed -E 's|/$||')
     fi
 fi
 
@@ -80,83 +90,18 @@ else
 fi
 echo -e "  GITHUB_REPO in .env:    ${DIM}${CURRENT_ENV_REPO:-not set}${RESET}"
 
-# ── Step 4: Handle mismatch / missing ────────────────────────────────────────
-TARGET_REPO=""
-
-if [ -n "$DETECTED_GITHUB" ] && [ "$DETECTED_GITHUB" = "$CURRENT_ENV_REPO" ]; then
-    # Perfect match — no action needed
+# ── Step 4: Resolve PR target (informational only) ───────────────────────────
+# Source of truth: the scanned repo's own git remote ALWAYS wins. .env GITHUB_REPO
+# is only a fallback for repos with no remote. The real resolution happens at
+# runtime in sage/config.py:set_repo() — this is just for the banner below.
+# No prompts, no .env rewriting: SAGE can never PR a repo other than the one scanned.
+if [ -n "$DETECTED_GITHUB" ]; then
     TARGET_REPO="$DETECTED_GITHUB"
-    echo -e "  ${GREEN}✓ GitHub repo matches .env — no changes needed${RESET}"
-
-elif [ -n "$DETECTED_GITHUB" ] && [ -n "$CURRENT_ENV_REPO" ] && [ "$DETECTED_GITHUB" != "$CURRENT_ENV_REPO" ]; then
-    # Mismatch — ask
-    echo ""
-    echo -e "${YELLOW}  GITHUB_REPO in .env doesn't match this repo's remote.${RESET}"
-    echo -e "  [1] Update .env to use ${BOLD}$DETECTED_GITHUB${RESET} (detected)"
-    echo -e "  [2] Keep .env as ${DIM}$CURRENT_ENV_REPO${RESET}"
-    echo -e "  [3] Enter a different owner/repo manually"
-    read -r -p "  Choice (1/2/3): " choice
-    case "$choice" in
-        1) TARGET_REPO="$DETECTED_GITHUB" ;;
-        2) TARGET_REPO="$CURRENT_ENV_REPO" ;;
-        3)
-            read -r -p "  Enter owner/repo (e.g. anubhavmohandas/MyApp): " TARGET_REPO
-            ;;
-        *) TARGET_REPO="$DETECTED_GITHUB" ;;
-    esac
-
-elif [ -z "$CURRENT_ENV_REPO" ]; then
-    # .env has no GITHUB_REPO set
-    if [ -n "$DETECTED_GITHUB" ]; then
-        echo ""
-        echo -e "  GITHUB_REPO not set in .env."
-        echo -e "  [1] Set to ${BOLD}$DETECTED_GITHUB${RESET} (detected from remote)"
-        echo -e "  [2] Enter manually"
-        echo -e "  [3] Skip (no PR creation)"
-        read -r -p "  Choice (1/2/3): " choice
-        case "$choice" in
-            1) TARGET_REPO="$DETECTED_GITHUB" ;;
-            2) read -r -p "  Enter owner/repo: " TARGET_REPO ;;
-            *) TARGET_REPO="" ;;
-        esac
-    else
-        echo ""
-        echo -e "  No GitHub remote found and GITHUB_REPO not set in .env."
-        echo -e "  [1] Enter GitHub repo (owner/repo) for PR creation"
-        echo -e "  [2] Skip GitHub PR"
-        read -r -p "  Choice (1/2): " choice
-        if [ "$choice" = "1" ]; then
-            read -r -p "  Enter owner/repo: " TARGET_REPO
-        fi
+    if [ -n "$CURRENT_ENV_REPO" ] && [ "$DETECTED_GITHUB" != "$CURRENT_ENV_REPO" ]; then
+        echo -e "  ${DIM}(.env GITHUB_REPO=$CURRENT_ENV_REPO ignored — using scanned repo's remote)${RESET}"
     fi
-
 else
-    TARGET_REPO="$CURRENT_ENV_REPO"
-fi
-
-# ── Step 5: Update .env if needed ────────────────────────────────────────────
-if [ -n "$TARGET_REPO" ] && [ "$TARGET_REPO" != "$CURRENT_ENV_REPO" ]; then
-    if [ -f "$ENV_FILE" ]; then
-        if grep -q "^GITHUB_REPO=" "$ENV_FILE"; then
-            # Replace existing line
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                sed -i '' "s|^GITHUB_REPO=.*|GITHUB_REPO=$TARGET_REPO|" "$ENV_FILE"
-            else
-                sed -i "s|^GITHUB_REPO=.*|GITHUB_REPO=$TARGET_REPO|" "$ENV_FILE"
-            fi
-        else
-            echo "GITHUB_REPO=$TARGET_REPO" >> "$ENV_FILE"
-        fi
-    else
-        echo "GITHUB_REPO=$TARGET_REPO" > "$ENV_FILE"
-    fi
-    echo -e "  ${GREEN}✓ .env updated: GITHUB_REPO=$TARGET_REPO${RESET}"
-fi
-
-# ── Step 6: Clear remembered choice so config.py doesn't use stale cache ─────
-CACHE_FILE="$SAGE_DIR/data/$REPO_NAME/.github_repo"
-if [ -f "$CACHE_FILE" ]; then
-    rm -f "$CACHE_FILE"
+    TARGET_REPO="$CURRENT_ENV_REPO"   # no remote → fall back to .env (may be empty)
 fi
 
 # ── Step 7: Ask for scan depth ────────────────────────────────────────────────
