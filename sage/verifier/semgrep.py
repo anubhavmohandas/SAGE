@@ -44,8 +44,6 @@ def _verify_dir() -> Path:
     except Exception:
         return Path("data/verify")
 
-PATCHES_DIR = Path("data/patches")  # legacy
-VERIFY_DIR  = Path("data/verify")   # legacy
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
@@ -245,36 +243,12 @@ def _verify_dep_bump(dep_bump: dict, repo_path: str) -> dict:
         if not found:
             issues.append(f"{pkg}: package not found in bumped requirements")
 
-    # Also run a quick Semgrep on original repo files to confirm still clean
-    repo_clean = _quick_semgrep_check(repo_path)
-    if not repo_clean:
-        issues.append("Semgrep found new issues in repo after dep bump")
-
     passed = len(issues) == 0
     return {
         "passed": passed,
         "reason": "; ".join(issues) if issues else "All version constraints valid",
         "issues": issues,
     }
-
-
-def _quick_semgrep_check(repo_path: str) -> bool:
-    """Quick Semgrep pass on repo — returns True if clean."""
-    try:
-        result = subprocess.run(
-            ["semgrep", "--json", "--quiet", "--config", "p/security-audit", repo_path],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        data = json.loads(result.stdout or "{}")
-        findings = data.get("results", [])
-        if findings:
-            cprint(f"[verifier] Semgrep found {len(findings)} issue(s) in repo (pre-existing)")
-        # Pre-existing findings don't block — we only care about NEW ones introduced by patch
-        return True
-    except Exception:
-        return True  # If Semgrep fails, don't block on it
 
 
 # ─── Summary ─────────────────────────────────────────────────────────────────

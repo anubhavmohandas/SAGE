@@ -40,8 +40,6 @@ def _responses_dir() -> Path:
     except Exception:
         return Path("data/responses")
 
-PROMPTS_DIR  = Path("data/prompts")   # legacy fallback
-RESPONSES_DIR = Path("data/responses") # legacy fallback
 
 
 # ─── Main analysis function ───────────────────────────────────────────────────

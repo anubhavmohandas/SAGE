@@ -131,7 +131,15 @@ def run_digest(repo_paths: list[str], days: int = 1) -> int:
     cprint(_c(f"╚{line}╝", color))
     cprint()
 
-    return 0 if total_errors == 0 else 2
+    # Exit codes match the docstring contract:
+    #   0 = clean (no CVEs, no errors)
+    #   1 = CVEs found or PRs raised (action was needed / taken)
+    #   2 = pipeline error in at least one repo
+    if total_errors > 0:
+        return 2
+    if total_cves > 0 or total_prs > 0:
+        return 1
+    return 0
 
 
 def _scan_repo(repo_path: str, days: int) -> dict:
@@ -154,7 +162,11 @@ def _scan_repo(repo_path: str, days: int) -> dict:
         from sage.tests.runner    import run_tests, save_test_results
         from sage.verifier.semgrep import run_verifier, save_verifier_results
         from sage.github.pr        import run_github_pr, save_pr_result
+        from sage.config import cfg
 
+        # Scope all data/ paths to data/<repo_name>/ so multi-repo digest scans
+        # don't overwrite each other's graph, DB, patches, and results.
+        cfg.set_repo(repo_path)
         init_db()
 
         # 1 — Stack detection

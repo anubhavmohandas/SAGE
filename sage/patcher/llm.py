@@ -43,7 +43,6 @@ def _patches_dir() -> Path:
     except Exception:
         return Path("data/patches")
 
-PATCHES_DIR = Path("data/patches")  # legacy fallback
 
 # Set at the start of each run_patcher() call. In manual mode, only response
 # files modified at/after this time are accepted as fresh; older ones are ignored
@@ -173,8 +172,11 @@ def _build_patch_prompt(
 ) -> str:
     code_section = ""
     for fc in function_codes[:5]:
+        ext  = Path(fc["file"]).suffix.lstrip(".") or "python"
+        lang = "typescript" if ext in ("ts", "tsx") else (
+               "javascript" if ext in ("js", "jsx", "mjs", "cjs") else "python")
         code_section += f"\nFile: {fc['file']} — function: {fc['function']}\n"
-        code_section += "```python\n"
+        code_section += f"```{lang}\n"
         code_section += fc["code"]
         code_section += "\n```\n"
 
@@ -374,7 +376,10 @@ def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: di
         (patch_dir / f"original_{safe_name}").write_text(original_code)
 
         # Write patched — replace function in original file content
-        patched_full = _apply_function_patch(original_code, func_name, patched)
+        patched_full = _apply_function_patch(
+            original_code, func_name, patched,
+            file_ext=Path(file_rel).suffix,
+        )
         (patch_dir / f"patched_{safe_name}").write_text(patched_full)
 
         # Write manifest entry so github/pr.py can reconstruct paths correctly
@@ -414,20 +419,40 @@ def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: di
         )
 
 
-def _apply_function_patch(original_source: str, func_name: str, patched_func: str) -> str:
-    """Replace a function in source with the patched version using AST."""
+def _apply_function_patch(
+    original_source: str,
+    func_name: str,
+    patched_func: str,
+    file_ext: str = ".py",
+) -> str:
+    """
+    Replace a named function in source with the patched version.
+
+    Dispatches by file extension:
+      .py                      → AST-based replacement (exact line range)
+      .js/.jsx/.ts/.tsx/.mjs   → brace-counting replacement (mirrors _extract_js_function)
+      anything else            → fallback append-as-comment (safe, visible failure)
+    """
+    ext = file_ext.lower()
+    if ext == ".py":
+        return _apply_python_function_patch(original_source, func_name, patched_func)
+    elif ext in (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"):
+        return _apply_js_function_patch(original_source, func_name, patched_func)
+    # Unknown extension — append as comment so the failure is visible
+    return original_source + f"\n\n// SAGE PATCH for {func_name}:\n{patched_func}\n"
+
+
+def _apply_python_function_patch(original_source: str, func_name: str, patched_func: str) -> str:
+    """AST-based replacement for Python functions."""
     import ast
-
     try:
-        tree = ast.parse(original_source)
+        tree  = ast.parse(original_source)
         lines = original_source.splitlines(keepends=True)
-
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if node.name == func_name:
-                    start = node.lineno - 1
-                    end   = node.end_lineno
-                    # Preserve indentation of original
+                    start  = node.lineno - 1
+                    end    = node.end_lineno
                     indent = len(lines[start]) - len(lines[start].lstrip())
                     indented = "\n".join(
                         " " * indent + l if l.strip() else l
@@ -437,9 +462,65 @@ def _apply_function_patch(original_source: str, func_name: str, patched_func: st
                     return "".join(new_lines)
     except Exception:
         pass
-
-    # Fallback — append patch as comment if AST fails
+    # Fallback — append as comment if AST fails (syntax error in original, etc.)
     return original_source + f"\n\n# SAGE PATCH for {func_name}:\n{patched_func}\n"
+
+
+def _apply_js_function_patch(original_source: str, func_name: str, patched_func: str) -> str:
+    """
+    Brace-counting replacement for JS/TS functions.
+
+    Locates the function declaration using the same patterns as
+    analyzer._extract_js_function, then replaces the entire body
+    (start_line through closing brace) with patched_func.
+    Falls back to appending as a comment if the function isn't found.
+    """
+    import re
+    lines = original_source.splitlines(keepends=True)
+
+    patterns = [
+        rf"(?:async\s+)?function\s+{re.escape(func_name)}\s*\(",
+        rf"(?:const|let|var)\s+{re.escape(func_name)}\s*=\s*(?:async\s+)?(?:\(|[a-zA-Z_$])",
+        rf"\b{re.escape(func_name)}\s*\(",
+    ]
+
+    start_line = None
+    for pat in patterns:
+        for i, line in enumerate(lines):
+            if re.search(pat, line):
+                start_line = i
+                break
+        if start_line is not None:
+            break
+
+    if start_line is None:
+        return original_source + f"\n\n// SAGE PATCH for {func_name}:\n{patched_func}\n"
+
+    # Walk forward collecting balanced braces to find end of function
+    depth        = 0
+    body_started = False
+    end_line     = start_line
+
+    for i in range(start_line, min(len(lines), start_line + 300)):
+        for ch in lines[i]:
+            if ch == "{":
+                depth        += 1
+                body_started  = True
+            elif ch == "}":
+                depth -= 1
+        if body_started and depth == 0:
+            end_line = i
+            break
+
+    # Preserve leading whitespace of the original declaration line
+    indent = len(lines[start_line]) - len(lines[start_line].lstrip())
+    indented_patch = "\n".join(
+        " " * indent + l if l.strip() else l
+        for l in patched_func.splitlines()
+    )
+
+    new_lines = lines[:start_line] + [indented_patch + "\n"] + lines[end_line + 1:]
+    return "".join(new_lines)
 
 
 def _generate_diff(original: str, patched: str, from_file: str, to_file: str) -> str:

@@ -53,7 +53,6 @@ def _output_path() -> Path:
     except Exception:
         return Path("data/synapse_graph.json")
 
-OUTPUT_PATH = Path("data/synapse_graph.json")  # legacy
 _CURRENT_REPO_NAME = ""  # set by export_graph from repo_path
 
 
@@ -184,8 +183,10 @@ def _generate_index_html(graph_data: dict, output_dir: Path):
 
     html = template.read_text()
 
-    # Inject graph data as JS variable right before </body>
-    graph_json = json.dumps(graph_data, separators=(",", ":"))
+    # Inject graph data as JS variable right before </body>.
+    # Escape </script> → <\/script> so a CVE description containing that string
+    # cannot break out of the <script> block and inject arbitrary HTML.
+    graph_json = json.dumps(graph_data, separators=(",", ":")).replace("</script>", r"<\/script>")
     inject = f"""
 <script>
 // Auto-injected by SAGE export — {len(graph_data['nodes'])} nodes, {len(graph_data['links'])} edges

@@ -136,7 +136,6 @@ def _tests_dir() -> Path:
     except Exception:
         return Path("data/tests")
 
-TESTS_DIR = Path("data/tests")  # legacy fallback
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
@@ -485,11 +484,24 @@ def _manual_test(vuln: dict, patched_code: str) -> Optional[str]:
     cprint(f"     {test_file.resolve()}")
     cprint(f"  Press Enter when saved  |  S to skip this CVE")
 
-    import select
+    import threading
+    _user_input: list[str] = []
+    _input_ready = threading.Event()
+
+    def _read_input():
+        try:
+            line = sys.stdin.readline().strip().lower()
+            _user_input.append(line)
+        except Exception:
+            pass
+        _input_ready.set()
+
+    watcher = threading.Thread(target=_read_input, daemon=True)
+    watcher.start()
+
     while True:
-        ready, _, _ = select.select([sys.stdin], [], [], 3.0)
-        if ready:
-            choice = sys.stdin.readline().strip().lower()
+        if _input_ready.wait(timeout=3.0):
+            choice = _user_input[0] if _user_input else ""
             if choice == "s":
                 cprint(f"[tests] Skipping test for {cve_id}")
                 return None

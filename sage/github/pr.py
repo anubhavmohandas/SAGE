@@ -39,8 +39,6 @@ from sage.config import cfg
 from sage.utils.colors import cprint, log_error, log_security
 
 
-PATCHES_DIR = Path("data/patches")
-
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
@@ -330,7 +328,8 @@ def _apply_patches(patch_result: dict, repo_path: str) -> list[str]:
                 func_name = entry.get("original_function", "")
                 if func_name:
                     merged[original_path] = _apply_function_patch(
-                        merged[original_path], func_name, patched_content
+                        merged[original_path], func_name, patched_content,
+                        file_ext=Path(original_path).suffix,
                     )
                 else:
                     # No function name — overwrite (legacy fallback)
@@ -339,7 +338,11 @@ def _apply_patches(patch_result: dict, repo_path: str) -> list[str]:
 
         else:
             # Fallback: filename reconstruction (single-level paths only)
-            for patched_file in patch_dir.glob("patched_*.py"):
+            _PATCHED_EXTS = (".py", ".js", ".jsx", ".ts", ".tsx")
+            patched_files_fb = []
+            for _ext in _PATCHED_EXTS:
+                patched_files_fb.extend(patch_dir.glob(f"patched_*{_ext}"))
+            for patched_file in patched_files_fb:
                 original_name = patched_file.name.replace("patched_", "").replace("_", "/", 1)
                 dst = repo / original_name
                 if not dst.exists():

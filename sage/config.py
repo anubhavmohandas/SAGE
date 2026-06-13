@@ -124,11 +124,11 @@ def load_config() -> Config:
     GITHUB_TOKEN      = os.getenv("GITHUB_TOKEN", "")
     GITHUB_REPO       = os.getenv("GITHUB_REPO", "")
 
-    # NVD key is optional (works without it, just rate-limited to 5 req/30s)
-    if not GITHUB_TOKEN:
-        missing.append("GITHUB_TOKEN")
-    if not GITHUB_REPO:
-        missing.append("GITHUB_REPO")
+    # Only ANTHROPIC_API_KEY is hard-required — without it the analyzer/patcher
+    # cannot run at all (manual mode still needs it for test generation).
+    # GITHUB_TOKEN and GITHUB_REPO are optional: pr.py skips PR creation when
+    # absent, and set_repo() auto-detects the target repo from git remote.
+    # NVD_API_KEY is optional (works without it, just rate-limited to 5 req/30s).
     if not ANTHROPIC_API_KEY:
         missing.append("ANTHROPIC_API_KEY")
 
@@ -141,6 +141,10 @@ def load_config() -> Config:
     if not NVD_API_KEY:
         cprint("[SAGE] Warning: NVD_API_KEY not set. Rate limited to 5 requests/30s.")
         cprint("[SAGE] Get a free key at: nvd.nist.gov/developers/request-an-api-key\n")
+    if not GITHUB_TOKEN:
+        cprint("[SAGE] Warning: GITHUB_TOKEN not set — PR creation will be skipped.")
+    if not GITHUB_REPO:
+        cprint("[SAGE] Note: GITHUB_REPO not set — will auto-detect from scanned repo's git remote.")
 
     return Config(
         NVD_API_KEY=NVD_API_KEY,
