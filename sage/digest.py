@@ -147,6 +147,7 @@ def _scan_repo(repo_path: str, days: int) -> dict:
         from sage.synapse.parser import parse_repo
         from sage.synapse.mapper import attach_cves, seed_libraries
         from sage.synapse.export import export_graph
+        from sage.reachability   import analyze_reachability
         from sage.scanner.semgrep import scan_blast_radius, save_findings
         from sage.analyzer.llm import analyze_findings, save_confirmed
         from sage.patcher.llm  import run_patcher
@@ -195,32 +196,35 @@ def _scan_repo(repo_path: str, days: int) -> dict:
         result["cve_count"] = len(all_cves)
         result["cves"]      = all_cves
 
-        # 4 — Scanner
+        # 4 — Reachability (needed for accurate exploitability analysis in stage 5)
+        reach_results = analyze_reachability(G)
+
+        # 5 — Scanner
         findings = scan_blast_radius(G, repo_path)
         save_findings(findings)
 
-        # 5 — Analyzer (always API in digest mode)
-        confirmed = analyze_findings(findings, G, repo_path)
+        # 6 — Analyzer (always API in digest mode)
+        confirmed = analyze_findings(findings, G, repo_path, reach_results=reach_results)
         save_confirmed(confirmed)
         result["confirmed_count"] = len(confirmed)
         result["confirmed"]       = confirmed
 
-        # 6 — Patcher
+        # 7 — Patcher
         patch_result = run_patcher(confirmed, repo_path, all_cves=all_cves)
         result["dep_bump"]     = bool(patch_result.get("dep_bump"))
         result["code_patches"] = len(patch_result.get("code_patches", []))
 
-        # 7 — Tests
+        # 8 — Tests
         test_results = run_tests(patch_result, confirmed, repo_path)
         save_test_results(test_results)
         result["tests_passed"] = test_results.get("all_passed", False)
 
-        # 8 — Verifier
+        # 9 — Verifier
         verify_results = run_verifier(patch_result, confirmed, repo_path)
         save_verifier_results(verify_results)
         result["verify_passed"] = verify_results.get("passed", False)
 
-        # 9 — GitHub PR
+        # 10 — GitHub PR
         pr_result = run_github_pr(
             patch_result=patch_result,
             confirmed=confirmed,

@@ -218,8 +218,6 @@ def _call_claude_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
     Call Claude (Sonnet) for patch generation.
     Falls back to manual export if no API key or credits exhausted.
     """
-    import sys
-
     # Respect the pipeline-wide mode. If the user chose MANUAL in the analyzer,
     # do NOT call any API here — just export the prompt and wait for the saved
     # response. (Previously the patcher ignored the analyzer's choice and hit the
@@ -228,83 +226,35 @@ def _call_claude_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
         cprint(f"[patcher] Manual mode — exporting prompt for {cve_id} (no API call)")
         return _manual_patch(prompt, cve_id)
 
-    # Check for API key first
-    if not cfg.ANTHROPIC_API_KEY and not cfg.GEMINI_API_KEY:
+    if not cfg.ANTHROPIC_API_KEY:
         return _manual_patch(prompt, cve_id)
 
-    # Try Gemini first (free tier), then Claude
-    result = _call_gemini_for_patch(prompt, cve_id)
-    if result:
-        return result
-
-    if cfg.ANTHROPIC_API_KEY:
-        try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
-            response = client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=4096,
-                temperature=0.1,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            raw = raw.strip()
-            result = json.loads(raw)
-            result = validate_patcher_response(result, cve_id)
-            if result is None:
-                return None
-            cprint(f"[patcher] {cve_id} (Claude Sonnet) → patch generated: {result.get('summary', '')[:80]}")
-            return result
-        except Exception as e:
-            cprint(f"[patcher] Claude error for {cve_id}: {e}")
-
-    # Both APIs failed — fall back to manual
-    return _manual_patch(prompt, cve_id)
-
-
-def _call_gemini_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
-    """Try Gemini for patch generation (free tier)."""
-    if not cfg.GEMINI_API_KEY:
-        return None
     try:
-        try:
-            from google import genai as google_genai
-            client = google_genai.Client(api_key=cfg.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config={"temperature": 0.1, "max_output_tokens": 4096},
-            )
-            raw = response.text.strip()
-        except ImportError:
-            import warnings, google.generativeai as genai
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                genai.configure(api_key=cfg.GEMINI_API_KEY)
-                model = genai.GenerativeModel("gemini-2.0-flash",
-                    generation_config={"temperature": 0.1, "max_output_tokens": 4096})
-                raw = model.generate_content(prompt).text.strip()
-
-        import re as _re
-        raw = _re.sub(r'^```(?:json)?\s*', '', raw)
-        raw = _re.sub(r'\s*```$', '', raw).strip()
+        import anthropic
+        client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
         result = json.loads(raw)
         result = validate_patcher_response(result, cve_id)
         if result is None:
             return None
-        cprint(f"[patcher] {cve_id} (Gemini) → patch generated: {result.get('summary', '')[:80]}")
+        cprint(f"[patcher] {cve_id} (Claude Sonnet) → patch generated: {result.get('summary', '')[:80]}")
         return result
     except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower():
-            log_warn_panel("patcher", f"Gemini quota exhausted for {cve_id}",
-                           "Will fall back to Claude or manual patch")
-        else:
-            log_error("patcher", f"Gemini error for {cve_id}", str(e))
-        return None
+        cprint(f"[patcher] Claude error for {cve_id}: {e}")
+
+    # API failed — fall back to manual
+    return _manual_patch(prompt, cve_id)
 
 
 def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
@@ -354,11 +304,24 @@ def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
     cprint(f"     {response_file.resolve()}")
     cprint(f"  Press Enter when saved  |  S to skip this CVE")
 
-    import select
+    import threading
+    _user_input: list[str] = []
+    _input_ready = threading.Event()
+
+    def _read_input():
+        try:
+            line = sys.stdin.readline().strip().lower()
+            _user_input.append(line)
+        except Exception:
+            pass
+        _input_ready.set()
+
+    watcher = threading.Thread(target=_read_input, daemon=True)
+    watcher.start()
+
     while True:
-        ready, _, _ = select.select([sys.stdin], [], [], 3.0)
-        if ready:
-            choice = sys.stdin.readline().strip().lower()
+        if _input_ready.wait(timeout=3.0):
+            choice = _user_input[0] if _user_input else ""
             if choice == "s":
                 cprint(f"[patcher] Skipping {cve_id}")
                 return None
@@ -419,9 +382,15 @@ def _write_patch_files(patch_dir: Path, vuln: dict, repo_path: str, response: di
         # Dedup: a file may be touched by multiple CVEs/entries — store each
         # (patched_file, original_path) pair ONCE. Appending blindly across
         # re-runs previously produced 4+ identical entries per file.
+        # Include original_function so pr.py can apply function-level merging
+        # when multiple CVEs patch different functions in the same file.
         manifest_path = patch_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else []
-        entry = {"patched_file": f"patched_{safe_name}", "original_path": file_rel}
+        entry = {
+            "patched_file":      f"patched_{safe_name}",
+            "original_path":     file_rel,
+            "original_function": func_name,
+        }
         if entry not in manifest:
             manifest.append(entry)
         manifest_path.write_text(json.dumps(manifest, indent=2))

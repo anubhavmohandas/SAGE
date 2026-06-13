@@ -45,7 +45,6 @@ load_dotenv()
 class Config:
     NVD_API_KEY: str
     ANTHROPIC_API_KEY: str
-    GEMINI_API_KEY: str
     GITHUB_TOKEN: str
     GITHUB_REPO: str
     _repo_name: str = field(default="default", repr=False)
@@ -122,18 +121,16 @@ def load_config() -> Config:
 
     NVD_API_KEY       = os.getenv("NVD_API_KEY", "")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
     GITHUB_TOKEN      = os.getenv("GITHUB_TOKEN", "")
     GITHUB_REPO       = os.getenv("GITHUB_REPO", "")
 
     # NVD key is optional (works without it, just rate-limited to 5 req/30s)
-    # Gemini key is optional — falls back to Anthropic if not set
     if not GITHUB_TOKEN:
         missing.append("GITHUB_TOKEN")
     if not GITHUB_REPO:
         missing.append("GITHUB_REPO")
-    if not ANTHROPIC_API_KEY and not GEMINI_API_KEY:
-        missing.append("ANTHROPIC_API_KEY or GEMINI_API_KEY (at least one required)")
+    if not ANTHROPIC_API_KEY:
+        missing.append("ANTHROPIC_API_KEY")
 
     if missing:
         raise EnvironmentError(
@@ -148,7 +145,6 @@ def load_config() -> Config:
     return Config(
         NVD_API_KEY=NVD_API_KEY,
         ANTHROPIC_API_KEY=ANTHROPIC_API_KEY,
-        GEMINI_API_KEY=GEMINI_API_KEY,
         GITHUB_TOKEN=GITHUB_TOKEN,
         GITHUB_REPO=GITHUB_REPO,
         _repo_name="default",

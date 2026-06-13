@@ -2,8 +2,8 @@
 analyzer/llm.py — LLM vulnerability confirmation (API + manual modes)
 
 At runtime, asks whether you have an API key available:
-  [y] API mode   — Gemini 2.0 Flash primary, Anthropic Haiku fallback,
-                   exponential backoff on 429.
+  [y] API mode   — Claude (Anthropic) with severity-gated models.
+                   CRITICAL → Opus, others → Sonnet.
   [n] Manual mode — exports prompt files to data/prompts/CVE-XXXX.txt.
                     You paste into Claude chat, save the JSON response to
                     data/responses/CVE-XXXX.json, re-run to continue.
@@ -72,7 +72,7 @@ def _ask_mode() -> str:
     import sys
     from sage.config import cfg
 
-    has_api_key = bool(cfg.ANTHROPIC_API_KEY or cfg.GEMINI_API_KEY)
+    has_api_key = bool(cfg.ANTHROPIC_API_KEY)
 
     # Non-interactive: no prompt, decide automatically
     if not sys.stdin.isatty():
@@ -83,8 +83,7 @@ def _ask_mode() -> str:
     # Interactive: always ask
     cprint("\n[analyzer] ── Analysis Mode ──")
     if has_api_key:
-        model_hint = "Gemini" if cfg.GEMINI_API_KEY else "Claude"
-        cprint(f"  API keys detected ({model_hint} available)")
+        cprint("  API key detected (Claude available)")
     else:
         cprint("  No API keys found in .env")
     cprint("  [1] API mode   — call LLM automatically")
@@ -107,8 +106,7 @@ def analyze_findings(
     """
     Determine analysis mode, then run accordingly.
 
-    API mode:   calls Gemini 2.0 Flash (with Anthropic fallback) per CVE.
-                Model is severity-gated: CRITICAL → Opus, others → Sonnet.
+    API mode:   calls Claude (Anthropic). CRITICAL → Opus, others → Sonnet.
     Manual mode: exports prompt files → you paste into Claude chat → drop JSON responses.
     Non-interactive (CI/cron): always uses API mode without prompting.
 
@@ -133,7 +131,7 @@ def _analyze_api(
     repo_path: str,
     reach_results: Optional[list[dict]] = None,
 ) -> list[dict]:
-    """API mode — Gemini primary, Anthropic fallback, exponential backoff on 429."""
+    """API mode — Claude (Anthropic), severity-gated model selection."""
     by_cve = _group_by_cve(findings, G)
     # Index reachability by cve_id for fast lookup
     reach_by_cve: dict[str, list[dict]] = {}
@@ -269,6 +267,22 @@ def _wait_for_responses(pending_files: list, by_cve: dict, G):
     cprint(f"  The pipeline will continue automatically once all {total} response(s) are saved.")
     cprint(f"  Or press Enter at any time to continue with responses saved so far.\n")
 
+    import threading
+
+    # Use a background thread to watch for Enter — avoids select.select()
+    # which is broken on Windows (doesn't support stdin on non-sockets).
+    _enter_pressed = threading.Event()
+
+    def _watch_stdin():
+        try:
+            sys.stdin.readline()
+        except Exception:
+            pass
+        _enter_pressed.set()
+
+    watcher = threading.Thread(target=_watch_stdin, daemon=True)
+    watcher.start()
+
     while True:
         # Check how many are done
         done = sum(
@@ -283,11 +297,11 @@ def _wait_for_responses(pending_files: list, by_cve: dict, G):
 
         cprint(f"  [{done}/{total} saved]  Waiting... (press Enter to continue anyway)", end="\r", flush=True)
 
-        # Non-blocking check: poll every 3s, but also catch Enter
-        import select
-        ready, _, _ = select.select([sys.stdin], [], [], 3.0)
-        if ready:
-            sys.stdin.readline()  # consume the Enter
+        if _enter_pressed.wait(timeout=3.0):
+            done = sum(
+                1 for pf in pending_files
+                if (responses_dir / pf.name.replace(".txt", ".json")).exists()
+            )
             cprint(f"\n[analyzer] Continuing with {done}/{total} responses saved...")
             break
 
@@ -369,146 +383,10 @@ def _analyze_single_cve_api(
 
 
 def _call_llm_api(prompt: str, cve_id: str, cfg, severity: str = "MEDIUM") -> Optional[dict]:
-    """Gemini primary, Anthropic fallback. Claude model is severity-gated."""
-    if cfg.GEMINI_API_KEY:
-        result = _call_gemini(prompt, cve_id, cfg)
-        if result is not None:
-            return result
-        # Only fall back to Claude if Gemini quota exhausted — not on every 429
-        # (Gemini 429 = rate limit, not quota; wait and retry instead)
-        if cfg.ANTHROPIC_API_KEY:
-            cprint(f"[analyzer] Falling back to Claude for {cve_id}")
-            result = _call_claude(prompt, cve_id, cfg, severity)
-            if result is None:
-                cprint(f"[analyzer] Both APIs failed for {cve_id} — skipping")
-            return result
-        return None
-    elif cfg.ANTHROPIC_API_KEY:
+    """Call Claude. Model is severity-gated: CRITICAL → Opus, others → Sonnet."""
+    if cfg.ANTHROPIC_API_KEY:
         return _call_claude(prompt, cve_id, cfg, severity)
-    cprint(f"[analyzer] No API key available for {cve_id}")
-    return None
-
-
-def _call_gemini(prompt: str, cve_id: str, cfg) -> Optional[dict]:
-    import time
-
-    # Try new google-genai SDK first (recommended), fall back to deprecated generativeai
-    try:
-        from google import genai as google_genai
-        return _call_gemini_new_sdk(prompt, cve_id, cfg, google_genai)
-    except ImportError:
-        pass
-
-    # Deprecated SDK fallback
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        cprint("[analyzer] Neither google-genai nor google-generativeai installed.")
-        return None
-
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        genai.configure(api_key=cfg.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            generation_config={"temperature": 0.2, "max_output_tokens": 1024},
-        )
-
-    raw = ""
-    for attempt in range(4):
-        try:
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                # Try flash-lite first (higher free tier quota), fall back to flash
-                try:
-                    lite_model = genai.GenerativeModel(
-                        model_name="gemini-2.0-flash-lite",
-                        generation_config={"temperature": 0.2, "max_output_tokens": 1024},
-                    )
-                    response = lite_model.generate_content(prompt)
-                except Exception:
-                    response = model.generate_content(prompt)
-            raw = _strip_fences(response.text.strip())
-            result = json.loads(raw)
-            result = validate_analyzer_response(result, cve_id)
-            if result is None:
-                return None
-            cprint(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
-                  f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
-            time.sleep(5)  # 5s between calls — stay under free tier 15 req/min
-            return result
-        except json.JSONDecodeError as e:
-            cprint(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
-            return None
-        except Exception as e:
-            err = str(e)
-            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                if attempt < 3:
-                    wait = 15 * (2 ** attempt)  # 15s, 30s, 60s — generous backoff
-                    cprint(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
-                    time.sleep(wait)
-                else:
-                    cprint(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
-                    return None
-            else:
-                cprint(f"[analyzer] Gemini error for {cve_id}: {e}")
-                return None
-    return None
-
-
-def _call_gemini_new_sdk(prompt: str, cve_id: str, cfg, genai_module) -> Optional[dict]:
-    """Use the new google-genai SDK (replaces deprecated google-generativeai)."""
-    import time
-    client = genai_module.Client(api_key=cfg.GEMINI_API_KEY)
-    # Try models in order of free-tier quota availability
-    models_to_try = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"]
-    raw = ""
-    for attempt in range(4):
-        try:
-            response = None
-            last_err = None
-            for model_name in models_to_try:
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config={"temperature": 0.2, "max_output_tokens": 1024},
-                    )
-                    break
-                except Exception as me:
-                    if "429" in str(me) or "quota" in str(me).lower():
-                        last_err = me
-                        continue
-                    raise
-            if response is None:
-                raise last_err
-            raw = _strip_fences(response.text.strip())
-            result = json.loads(raw)
-            result = validate_analyzer_response(result, cve_id)
-            if result is None:
-                return None
-            cprint(f"[analyzer] {cve_id} (Gemini) → vulnerable={result.get('vulnerable')} "
-                  f"confidence={result.get('confidence', 0):.2f} | {result.get('reason','')[:80]}")
-            time.sleep(5)
-            return result
-        except json.JSONDecodeError as e:
-            cprint(f"[analyzer] JSON parse error for {cve_id}: {e} | raw: {raw[:200]}")
-            return None
-        except Exception as e:
-            err = str(e)
-            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                if attempt < 3:
-                    wait = 15 * (2 ** attempt)
-                    cprint(f"[analyzer] Gemini 429 for {cve_id} — retry in {wait}s ({attempt+1}/3)")
-                    time.sleep(wait)
-                else:
-                    cprint(f"[analyzer] Gemini quota exhausted for {cve_id} — skipping")
-                    return None
-            else:
-                cprint(f"[analyzer] Gemini error for {cve_id}: {e}")
-                return None
+    cprint(f"[analyzer] No ANTHROPIC_API_KEY available for {cve_id}")
     return None
 
 
@@ -611,8 +489,11 @@ def _build_prompt(
     if function_codes:
         code_section = "\n\nEXPOSED FUNCTIONS IN CODEBASE:\n"
         for fc in function_codes[:5]:
+            ext = Path(fc["file"]).suffix.lstrip(".") or "python"
+            lang = "typescript" if ext in ("ts", "tsx") else (
+                   "javascript" if ext in ("js", "jsx", "mjs", "cjs") else "python")
             code_section += f"\nFile: {fc['file']} — {fc['function']}\n"
-            code_section += "```python\n"
+            code_section += f"```{lang}\n"
             code_section += fc["code"]
             code_section += "\n```\n"
     else:
@@ -818,6 +699,22 @@ def _extract_file_snippets(exposed_files, repo_path, package):
 
 
 def _extract_function_source(file_path: Path, func_name: str, line_num: int) -> str:
+    ext = file_path.suffix.lower()
+    if ext == ".py":
+        return _extract_python_function(file_path, func_name, line_num)
+    elif ext in (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"):
+        return _extract_js_function(file_path, func_name, line_num)
+    # Unknown extension — fall back to line window
+    try:
+        lines = file_path.read_text(errors="ignore").splitlines()
+        if line_num > 0:
+            return "\n".join(lines[max(0, line_num - 1):min(len(lines), line_num + 20)])
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_python_function(file_path: Path, func_name: str, line_num: int) -> str:
     import ast
     try:
         source = file_path.read_text(errors="ignore")
@@ -829,6 +726,66 @@ def _extract_function_source(file_path: Path, func_name: str, line_num: int) -> 
                     return "\n".join(lines[node.lineno - 1:node.end_lineno])
         if line_num > 0:
             return "\n".join(lines[max(0, line_num - 1):min(len(lines), line_num + 20)])
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_js_function(file_path: Path, func_name: str, line_num: int) -> str:
+    """
+    Extract a JS/TS function by scanning for its declaration and collecting
+    the body via brace counting. Handles:
+      - function foo(        — classic declaration
+      - const foo = (        — arrow function assigned to const
+      - async function foo(  — async declaration
+      - foo(                 — method shorthand (class body)
+    Falls back to a 30-line window around line_num if the pattern isn't found.
+    """
+    import re
+    try:
+        source = file_path.read_text(errors="ignore")
+        lines  = source.splitlines()
+
+        # Patterns ordered from most to least specific
+        patterns = [
+            rf"(?:async\s+)?function\s+{re.escape(func_name)}\s*\(",
+            rf"(?:const|let|var)\s+{re.escape(func_name)}\s*=\s*(?:async\s+)?(?:\(|[a-zA-Z_$])",
+            rf"\b{re.escape(func_name)}\s*\(",
+        ]
+
+        start_line = None
+        for pat in patterns:
+            for i, line in enumerate(lines):
+                if re.search(pat, line):
+                    start_line = i
+                    break
+            if start_line is not None:
+                break
+
+        if start_line is None:
+            # Fall back to window around provided line number
+            if line_num > 0:
+                s = max(0, line_num - 1)
+                return "\n".join(lines[s:min(len(lines), s + 30)])
+            return ""
+
+        # Walk forward collecting balanced braces
+        depth = 0
+        body_started = False
+        end_line = start_line
+
+        for i in range(start_line, min(len(lines), start_line + 200)):
+            for ch in lines[i]:
+                if ch == "{":
+                    depth += 1
+                    body_started = True
+                elif ch == "}":
+                    depth -= 1
+            if body_started and depth == 0:
+                end_line = i
+                break
+
+        return "\n".join(lines[start_line:end_line + 1])
     except Exception:
         pass
     return ""

@@ -322,11 +322,19 @@ def _apply_patches(patch_result: dict, repo_path: str) -> list[str]:
                     merged[original_path]    = dst.read_text(errors="ignore")
                     file_cves[original_path] = []
 
-                # Extract the patched function from the CVE patch file and
-                # apply it on top of whatever accumulated state we have.
-                # This way each function replacement is independent and all survive.
+                # Read the patched file and extract the function name from the
+                # manifest so we can apply just that function into the accumulated
+                # state. Fallback: if we can't extract a function name, full-replace
+                # (last CVE wins — acceptable only when a single function covers the file).
                 patched_content = patched_file.read_text(errors="ignore")
-                merged[original_path] = patched_content
+                func_name = entry.get("original_function", "")
+                if func_name:
+                    merged[original_path] = _apply_function_patch(
+                        merged[original_path], func_name, patched_content
+                    )
+                else:
+                    # No function name — overwrite (legacy fallback)
+                    merged[original_path] = patched_content
                 file_cves[original_path].append(cve_id)
 
         else:

@@ -13,7 +13,6 @@ packaging==24.1
 
 # LLM — analyzer + patch generator
 anthropic==0.40.0
-google-genai>=2.8.0      # Gemini API (primary analyzer) — replaces deprecated google-generativeai
 
 # GitHub PR automation
 PyGithub==2.5.0
