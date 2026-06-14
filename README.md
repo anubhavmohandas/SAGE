@@ -98,7 +98,6 @@ cp .env.example .env   # add your API keys
 ```
 NVD_API_KEY=       # https://nvd.nist.gov/developers/request-an-api-key
 ANTHROPIC_API_KEY= # https://console.anthropic.com
-GEMINI_API_KEY=    # optional — used as primary analyzer, Anthropic as fallback
 GITHUB_TOKEN=      # repo:write scope (Contents + Pull requests)
 GITHUB_REPO=       # owner/repo
 ```
