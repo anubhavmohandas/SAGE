@@ -3,9 +3,14 @@ main.py — SAGE entry point
 
 Usage:
     python main.py --repo /path/to/your/repo
+    python main.py --repo https://github.com/owner/repo   (cloned to a temp dir)
     python main.py --repo /path/to/your/repo --days 7
     python main.py --cve CVE-2021-44228          (lookup single CVE)
     python main.py --status                       (show pipeline summary)
+
+    Anywhere a repo path is accepted (--repo, --synapse, --digest) a GitHub URL
+    works too: it's shallow-cloned to a temp directory, scanned, then deleted.
+    Results still land in data/<repo_name>/ and survive the cleanup.
 
 Teaching note:
     main.py is the only file you run directly.
@@ -34,6 +39,7 @@ from sage.tests.runner    import run_tests, print_test_summary, save_test_result
 from sage.verifier.semgrep import run_verifier, print_verifier_summary, save_verifier_results
 from sage.github.pr        import run_github_pr, print_pr_summary, save_pr_result
 from sage.reachability     import analyze_reachability, print_reachability_summary, save_reachability
+from sage.utils.repo_source import resolve_repo, cleanup
 
 
 def run_fetch(repo_path: str, days: int = 1):
@@ -276,7 +282,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="SAGE — Security Analysis & Graph Engine"
     )
-    parser.add_argument("--repo",    type=str, help="Path to repo to scan")
+    parser.add_argument("--repo",    type=str, help="Path or GitHub URL of repo to scan")
     parser.add_argument("--days",    type=int, default=1, help="Days of CVEs to fetch (default: 1)")
     parser.add_argument("--cve",     type=str, help="Look up a specific CVE by ID")
     parser.add_argument("--status",  action="store_true", help="Show pipeline status")
@@ -291,20 +297,35 @@ def main():
     if args.status or args.cve:
         init_db()
 
-    if args.status:
-        run_status()
-    elif args.cve:
-        run_single_cve(args.cve)
-    elif args.synapse:
-        run_synapse(args.synapse)
-    elif args.digest:
-        from sage.digest import run_digest
-        sys.exit(run_digest(args.digest, days=args.days))
-    elif args.repo:
-        run_fetch(args.repo, days=args.days)
-    else:
-        parser.print_help()
-        sys.exit(1)
+    # Any repo argument may be a GitHub URL — resolve_repo() clones it to a temp
+    # dir and hands back the path; cleanup() removes it however the run ends.
+    tmpdirs = []
+    try:
+        if args.status:
+            run_status()
+        elif args.cve:
+            run_single_cve(args.cve)
+        elif args.synapse:
+            path, tmp = resolve_repo(args.synapse)
+            tmpdirs.append(tmp)
+            run_synapse(path)
+        elif args.digest:
+            paths = []
+            for repo in args.digest:
+                path, tmp = resolve_repo(repo)
+                tmpdirs.append(tmp)
+                paths.append(path)
+            from sage.digest import run_digest
+            sys.exit(run_digest(paths, days=args.days))
+        elif args.repo:
+            path, tmp = resolve_repo(args.repo)
+            tmpdirs.append(tmp)
+            run_fetch(path, days=args.days)
+        else:
+            parser.print_help()
+            sys.exit(1)
+    finally:
+        cleanup(*tmpdirs)
 
 
 if __name__ == "__main__":

@@ -41,25 +41,44 @@ EXTRA_ARGS="${@:2}"  # everything after the first arg passed to main.py
 
 if [ -z "$REPO_PATH" ]; then
     echo -e "${BOLD}Which repo do you want to scan?${RESET}"
-    echo -e "${DIM}Enter full path (e.g. /Users/you/projects/MyApp)${RESET}"
-    read -r -p "  Repo path: " REPO_PATH
+    echo -e "${DIM}Enter a full path (/Users/you/projects/MyApp)${RESET}"
+    echo -e "${DIM}or a GitHub URL (https://github.com/owner/repo) — cloned to a temp dir${RESET}"
+    read -r -p "  Repo path or URL: " REPO_PATH
     REPO_PATH="${REPO_PATH/#\~/$HOME}"  # expand ~
 fi
 
-if [ ! -d "$REPO_PATH" ]; then
+# A GitHub URL is cloned by main.py (sage/utils/repo_source.py) into a temp dir
+# and deleted after the run — so skip the local-path and git-remote checks here
+# and read the PR target straight off the URL.
+IS_URL=0
+if [[ "$REPO_PATH" =~ ^(https?://)?(git@)?github\.com[/:] ]]; then
+    IS_URL=1
+fi
+
+if [ "$IS_URL" -eq 0 ] && [ ! -d "$REPO_PATH" ]; then
     echo -e "${RED}[sage] Directory not found: $REPO_PATH${RESET}"
+    echo -e "${DIM}       Tip: a GitHub URL works too — https://github.com/owner/repo${RESET}"
     exit 1
 fi
 
-REPO_NAME=$(basename "$REPO_PATH")
+REPO_NAME=$(basename "${REPO_PATH%.git}")
 echo ""
-echo -e "${BOLD}Repo:${RESET} $REPO_PATH ${DIM}($REPO_NAME)${RESET}"
+if [ "$IS_URL" -eq 1 ]; then
+    echo -e "${BOLD}Repo:${RESET} $REPO_PATH ${DIM}($REPO_NAME — temp clone)${RESET}"
+else
+    echo -e "${BOLD}Repo:${RESET} $REPO_PATH ${DIM}($REPO_NAME)${RESET}"
+fi
 
 # ── Step 2: Detect GitHub remote ─────────────────────────────────────────────
 DETECTED_GITHUB=""
+if [ "$IS_URL" -eq 1 ]; then
+    DETECTED_GITHUB=$(echo "$REPO_PATH" \
+        | sed -E 's|^.*github\.com[/:]||' \
+        | sed -E 's|\.git$||' \
+        | sed -E 's|/$||')
 # Use -e (not -d): .git is a file for worktrees/submodules. Also fall back to the
 # first remote if there's no "origin".
-if [ -e "$REPO_PATH/.git" ]; then
+elif [ -e "$REPO_PATH/.git" ]; then
     RAW_REMOTE=$(git -C "$REPO_PATH" remote get-url origin 2>/dev/null || echo "")
     if [ -z "$RAW_REMOTE" ]; then
         FIRST_REMOTE=$(git -C "$REPO_PATH" remote 2>/dev/null | head -1)

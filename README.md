@@ -111,8 +111,9 @@ GITHUB_REPO=       # owner/repo
 The easiest way to run SAGE is the interactive launcher — it auto-detects your GitHub remote, asks which repo to scan, and lets you pick the CVE window:
 
 ```bash
-bash sage_scan.sh                              # interactive — asks for repo path
+bash sage_scan.sh                              # interactive — asks for repo path or URL
 bash sage_scan.sh /path/to/repo               # skip the path prompt
+bash sage_scan.sh https://github.com/owner/repo   # GitHub URL — cloned to a temp dir
 bash sage_scan.sh /path/to/repo --days 30     # pass extra flags to main.py
 ```
 
@@ -121,6 +122,10 @@ Or call `main.py` directly for scripting:
 ```bash
 # Full pipeline
 python3 main.py --repo /path/to/repo
+
+# Scan a repo you don't have locally — shallow-cloned to a temp dir,
+# scanned, then deleted. Results stay in data/<repo_name>/.
+python3 main.py --repo https://github.com/owner/repo
 
 # Wider CVE window (default is 1 day)
 python3 main.py --repo /path/to/repo --days 30

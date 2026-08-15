@@ -22,9 +22,10 @@ Write-Host ""
 # ── Step 1: Get repo path ─────────────────────────────────────────────────────
 if (-not $RepoPath) {
     Write-Host "Which repo do you want to scan?" -ForegroundColor White
-    Write-Host "Enter full path, or press Enter to browse..." -ForegroundColor DarkGray
+    Write-Host "Enter a full path or a GitHub URL (https://github.com/owner/repo)," -ForegroundColor DarkGray
+    Write-Host "or press Enter to browse..." -ForegroundColor DarkGray
 
-    $typed = Read-Host "  Repo path"
+    $typed = Read-Host "  Repo path or URL"
 
     if (-not $typed) {
         # Open folder picker
@@ -43,18 +44,32 @@ if (-not $RepoPath) {
     }
 }
 
-if (-not (Test-Path $RepoPath)) {
+# A GitHub URL is cloned by main.py (sage/utils/repo_source.py) into a temp dir
+# and deleted after the run — so skip the local-path and git-remote checks here
+# and read the PR target straight off the URL.
+$IsUrl = $RepoPath -match "^(https?://)?(git@)?github\.com[/:]"
+
+if (-not $IsUrl -and -not (Test-Path $RepoPath)) {
     Write-Host "[sage] Directory not found: $RepoPath" -ForegroundColor Red
+    Write-Host "       Tip: a GitHub URL works too - https://github.com/owner/repo" -ForegroundColor DarkGray
     exit 1
 }
 
-$RepoName = Split-Path $RepoPath -Leaf
+$RepoName = Split-Path ($RepoPath -replace "\.git$", "") -Leaf
 Write-Host ""
-Write-Host "Repo: $RepoPath ($RepoName)" -ForegroundColor White
+if ($IsUrl) {
+    Write-Host "Repo: $RepoPath ($RepoName - temp clone)" -ForegroundColor White
+} else {
+    Write-Host "Repo: $RepoPath ($RepoName)" -ForegroundColor White
+}
 
 # ── Step 2: Detect GitHub remote ─────────────────────────────────────────────
 $DetectedGitHub = ""
-if (Test-Path "$RepoPath\.git") {
+if ($IsUrl) {
+    if ($RepoPath -match "github\.com[/:]([^/]+/[^/]+?)(\.git)?/?$") {
+        $DetectedGitHub = $Matches[1]
+    }
+} elseif (Test-Path "$RepoPath\.git") {
     try {
         $rawRemote = git -C $RepoPath remote get-url origin 2>$null
         if ($rawRemote) {
