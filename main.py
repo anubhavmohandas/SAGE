@@ -21,6 +21,7 @@ Teaching note:
 import argparse
 import json
 import sys
+from pathlib import Path
 
 # Config loads first — fails fast if .env is missing keys
 from sage.config import cfg
@@ -131,6 +132,46 @@ def run_fetch(repo_path: str, days: int = 1):
     run_synapse(repo_path)
 
 
+def confirm_patching(confirmed: list[dict], all_cves: list[dict]) -> bool:
+    """
+    Pipeline gate between analysis and patching.
+
+    Everything before this point only reads the repo (graph, CVEs, Semgrep,
+    exploitability). Everything after it writes patches, installs deps, runs the
+    repo's test suite and pushes a branch — so the run pauses here and asks.
+
+    Returns True to continue. Non-interactive runs (cron, digest, piped input)
+    always continue: an unattended scan must never block on a prompt.
+    """
+    if not confirmed and not all_cves:
+        return True  # nothing to patch — no point asking
+
+    if not sys.stdin.isatty():
+        cprint("[SAGE] Non-interactive — continuing to patch generation")
+        return True
+
+    cprint(f"\n{'='*60}")
+    cprint(f"  Analysis complete — what happens next writes code")
+    cprint(f"{'='*60}")
+    cprint(f"  Confirmed exploitable:  {len(confirmed)}")
+    for v in confirmed:
+        cprint(f"    [{v.get('severity', '?'):8s}] {v.get('cve_id', '?')} → {v.get('package', '?')}")
+    cprint(f"  CVEs eligible for dependency bump: {len(all_cves)}")
+    cprint(f"\n  Continuing runs: patch generation → tests → verifier → GitHub PR.")
+    cprint(f"  Stopping keeps the graph and findings already saved on disk.")
+
+    while True:
+        try:
+            choice = input("\n  Generate patches now? [y/N]: ").strip().lower()
+        except EOFError:
+            return False
+        if choice in ("y", "yes"):
+            return True
+        if choice in ("", "n", "no"):
+            return False
+        cprint("  Please answer y or n.")
+
+
 def run_synapse(repo_path: str):
     """
     Build the Synapse knowledge graph for a repo.
@@ -188,10 +229,8 @@ def run_synapse(repo_path: str):
     save_confirmed(confirmed)
     print_analysis_summary(confirmed)
 
-    # Step 6 — Patcher
-    print_banner("PATCHER — Automated Fix Generation")
-    log("SAGE", "Patcher Step 1/1 — Generating patches...")
-
+    # Every CVE on the graph — the gate below reports them, the patcher's dep
+    # bump uses them (bumps apply even to CVEs that aren't exploitable in code).
     seen_cves = set()
     all_cves = []
     for node, data in G.nodes(data=True):
@@ -205,6 +244,19 @@ def run_synapse(repo_path: str):
                     "affected_range": data.get("affected_range", ""),
                     "severity":       data.get("severity", "UNKNOWN"),
                 })
+
+    # ── Gate: everything above is read-only, everything below writes patches ──
+    if not confirm_patching(confirmed, all_cves):
+        log("SAGE", "Stopped before patching — nothing was patched, tested, or pushed.")
+        cprint(f"  Graph + findings saved → {cfg.data_dir()}/")
+        cprint(f"  Open the graph:          demos/{Path(repo_path).name}_<today>/index.html")
+        cprint(f"  Want the patches? Re-run the same command and answer 'y'.")
+        print_made_by()
+        return
+
+    # Step 6 — Patcher
+    print_banner("PATCHER — Automated Fix Generation")
+    log("SAGE", "Patcher Step 1/1 — Generating patches...")
 
     patch_result = run_patcher(confirmed, repo_path, all_cves=all_cves)
     print_patch_summary(patch_result)

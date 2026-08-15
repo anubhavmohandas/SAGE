@@ -22,6 +22,8 @@ Manual response schema:
 import json
 from pathlib import Path
 from typing import Optional
+from sage.config import cfg
+from sage.utils.bundle import collect_reply, split_bundle_response, write_bundle
 from sage.utils.colors import cprint
 from sage.utils.validate import validate_analyzer_response
 
@@ -223,15 +225,25 @@ def _analyze_manual(
         ])
         cprint(f"\n[analyzer] ── Manual review needed ──")
         cprint(f"  {pending} CVE(s) awaiting your review.\n")
-        for pf in pending_files:
+
+        # One bundle, one paste — writes the per-CVE response files itself.
+        _manual_bundle(pending_files)
+
+        # Anything the bundle didn't cover (skipped, or a section that failed to
+        # parse) still falls back to the per-file wait.
+        still_pending = [
+            pf for pf in pending_files
+            if not (_responses_dir() / pf.name.replace(".txt", ".json")).exists()
+        ]
+        for pf in still_pending:
             cprint(f"  ┌─ {pf.name} ─────────────────────────────────────────")
             cprint(f"  │  cat \"{pf.resolve()}\"")
             resp_path = _responses_dir() / pf.name.replace(".txt", ".json")
             cprint(f"  │  Paste content into Claude → save response as:")
             cprint(f"  │  \"{resp_path.resolve()}\"")
             cprint(f"  └────────────────────────────────────────────────────\n")
-        # Wait for user to paste responses, then continue automatically
-        _wait_for_responses(pending_files, by_cve, G)
+        if still_pending:
+            _wait_for_responses(still_pending, by_cve, G)
         # Re-read all responses after user confirms
         confirmed = []
         for cve_id in by_cve:
@@ -243,6 +255,62 @@ def _analyze_manual(
         cprint(f"[analyzer] Confirmed after review: {len(confirmed)}/{len(by_cve)} CVEs exploitable")
 
     return confirmed
+
+
+_BUNDLE_HEADER = """You are a security vulnerability analyst. Below are multiple CVE analysis tasks.
+For EACH CVE, respond with EXACTLY this format — no extra text, no markdown:
+
+=== CVE-XXXX-XXXXX ===
+{"vulnerable": true or false, "confidence": 0.0-1.0, "reason": "one sentence", \
+"affected_functions": ["fn1"], "attack_vector": "how attacker reaches it, or empty string", \
+"recommendation": "fix, or empty string"}
+
+Analyze each CVE independently. Output ALL responses before moving to the next.
+---
+
+"""
+
+
+def _manual_bundle(pending_files: list) -> None:
+    """
+    Manual mode, one paste for the whole review.
+
+    Bundles every pending CVE prompt into one file, opens it next to a blank
+    reply file, and splits the saved reply back into responses/<CVE>.json —
+    the work export_prompts.sh + import_responses.sh used to do in a second
+    terminal, done here so the pipeline never breaks.
+
+    Non-interactive: writes the bundle and returns.
+    """
+    if not pending_files:
+        return
+
+    tasks = [(pf.stem, pf.read_text()) for pf in pending_files]
+    bundle = write_bundle(cfg.data_dir() / "all_prompts.txt", _BUNDLE_HEADER, tasks)
+    cprint(f"[analyzer] ── {len(tasks)} CVE(s), one paste ──")
+    cprint(f"  Bundle → {bundle.resolve()}")
+
+    reply_path = collect_reply(bundle, cfg.data_dir() / "all_responses.txt", "manual review")
+    if reply_path is None:
+        return
+
+    verdicts = split_bundle_response(
+        reply_path.read_text(),
+        only_cve=tasks[0][0] if len(tasks) == 1 else "",
+    )
+
+    saved = 0
+    for cve_id, data in verdicts.items():
+        clean = validate_analyzer_response(data, cve_id)
+        if clean is None:
+            cprint(f"  [!] {cve_id} — response rejected by validation")
+            continue
+        (_responses_dir() / f"{cve_id}.json").write_text(json.dumps(clean, indent=2))
+        verdict = "vulnerable" if clean.get("vulnerable") else "clean"
+        cprint(f"  ✓ {cve_id}  [{verdict}]  confidence={clean.get('confidence', 0):.0%}")
+        saved += 1
+
+    cprint(f"[analyzer] Imported {saved}/{len(tasks)} response(s)")
 
 
 def _wait_for_responses(pending_files: list, by_cve: dict, G):

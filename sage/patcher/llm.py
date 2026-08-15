@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from sage.config import cfg
+from sage.utils.bundle import collect_reply, split_bundle_response, write_bundle
 from sage.utils.colors import cprint, log_error, log_security, log_warn_panel
 from sage.utils.validate import validate_patcher_response
 
@@ -88,6 +89,12 @@ def run_patcher(confirmed: list[dict], repo_path: str, all_cves: list[dict] = No
 
     cprint(f"[patcher] {len(confirmed)} confirmed exploitable CVE(s) → code patches")
 
+    # Manual mode: bundle every prompt and collect one combined reply up front,
+    # so the loop below finds each response already saved instead of stopping
+    # once per CVE. Replaces the export_patches.sh / import_patches.sh detour.
+    if getattr(cfg, "llm_mode", "api") == "manual":
+        _manual_bundle(confirmed)
+
     # 1. Code patches for confirmed exploitable CVEs
     code_patches = []
     for vuln in confirmed:
@@ -118,32 +125,15 @@ def _generate_code_patch(vuln: dict, repo_path: str) -> Optional[dict]:
     Ask Claude to generate a code-level fix for a confirmed vulnerability.
     Writes original + patched file + diff + explanation to data/patches/<cve_id>/
     """
-    cve_id    = vuln["cve_id"]
-    package   = vuln.get("package", "")
-    cwe       = vuln.get("cwe", "")
-    reason    = vuln.get("reason", "")
-    rec       = vuln.get("recommendation", "")
-    attack    = vuln.get("attack_vector", "")
-    functions = vuln.get("affected_functions", [])
-    fn_codes  = vuln.get("function_codes", [])
+    cve_id = vuln["cve_id"]
 
-    if not fn_codes and not functions:
+    prompt = _patch_prompt_for(vuln)
+    if prompt is None:
         cprint(f"[patcher] {cve_id} — no function code available, skipping code patch")
         return None
 
     patch_dir = _patches_dir() / cve_id
     patch_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build prompt for Claude
-    prompt = _build_patch_prompt(
-        cve_id=cve_id,
-        package=package,
-        cwe=cwe,
-        reason=reason,
-        attack_vector=attack,
-        recommendation=rec,
-        function_codes=fn_codes,
-    )
 
     # Call Claude for the patch
     response = _call_claude_for_patch(prompt, cve_id)
@@ -159,6 +149,25 @@ def _generate_code_patch(vuln: dict, repo_path: str) -> Optional[dict]:
         "patch_dir": str(patch_dir),
         "files":     response.get("patched_files", []),
     }
+
+
+def _patch_prompt_for(vuln: dict) -> Optional[str]:
+    """
+    Build the patch prompt for one confirmed vuln.
+    Returns None when there's no function code to patch.
+    """
+    fn_codes = vuln.get("function_codes", [])
+    if not fn_codes and not vuln.get("affected_functions", []):
+        return None
+    return _build_patch_prompt(
+        cve_id=vuln["cve_id"],
+        package=vuln.get("package", ""),
+        cwe=vuln.get("cwe", ""),
+        reason=vuln.get("reason", ""),
+        attack_vector=vuln.get("attack_vector", ""),
+        recommendation=vuln.get("recommendation", ""),
+        function_codes=fn_codes,
+    )
 
 
 def _build_patch_prompt(
@@ -257,6 +266,72 @@ def _call_claude_for_patch(prompt: str, cve_id: str) -> Optional[dict]:
 
     # API failed — fall back to manual
     return _manual_patch(prompt, cve_id)
+
+
+_BUNDLE_HEADER = """You are a security engineer. Below are multiple code patching tasks.
+For EACH task, respond with EXACTLY this format — no extra text, no markdown:
+
+=== CVE-XXXX-XXXXX ===
+{"patched_files": [{"file": "relative/path.py", "original_function": "fn_name", \
+"patched_code": "complete patched function", "explanation": "what changed and why"}], \
+"summary": "one sentence"}
+
+---
+
+"""
+
+def _manual_bundle(confirmed: list[dict]) -> None:
+    """
+    Manual mode, one paste for the whole run.
+
+    Writes every still-unanswered patch prompt into a single bundle file, waits
+    while you paste it into Claude, then splits the reply back into per-CVE
+    patch_response_<CVE>.json files. _manual_patch() then finds each response
+    already saved and applies it without stopping again.
+
+    Non-interactive: writes the bundle and returns — the run continues and each
+    CVE is skipped, exactly as before.
+    """
+    pd = _patches_dir()
+    pd.mkdir(parents=True, exist_ok=True)
+
+    pending = []
+    for vuln in confirmed:
+        cve_id = vuln["cve_id"]
+        if _is_fresh(pd / f"patch_response_{cve_id}.json"):
+            continue  # already answered during this run
+        prompt = _patch_prompt_for(vuln)
+        if prompt is None:
+            continue  # nothing to patch for this CVE
+        (pd / f"patch_prompt_{cve_id}.txt").write_text(prompt)
+        pending.append((cve_id, prompt))
+
+    if not pending:
+        return
+
+    bundle = write_bundle(pd / "all_patch_prompts.txt", _BUNDLE_HEADER, pending)
+    cprint(f"\n[patcher] ── Manual patches: {len(pending)} CVE(s), one paste ──")
+    cprint(f"  Bundle → {bundle.resolve()}")
+
+    reply_path = collect_reply(bundle, pd / "all_patch_responses.json", "code patches")
+    if reply_path is None:
+        return
+
+    patches = split_bundle_response(
+        reply_path.read_text(),
+        only_cve=pending[0][0] if len(pending) == 1 else "",
+    )
+
+    saved = 0
+    for cve_id, data in patches.items():
+        if validate_patcher_response(data, cve_id) is None:
+            cprint(f"  [!] {cve_id} — response rejected by validation")
+            continue
+        (pd / f"patch_response_{cve_id}.json").write_text(json.dumps(data, indent=2))
+        cprint(f"  ✓ {cve_id} → {len(data.get('patched_files', []))} file(s)")
+        saved += 1
+
+    cprint(f"[patcher] Imported {saved}/{len(pending)} patch response(s)")
 
 
 def _manual_patch(prompt: str, cve_id: str) -> Optional[dict]:
